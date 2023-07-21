@@ -1,0 +1,8 @@
+{
+"type": "FeatureCollection",
+"name": "higueron",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { "id": null }, "geometry": { "type": "MultiPolygon", "coordinates": [ [ [ [ -4.709927119633486, 36.651324571355602 ], [ -4.588126504565479, 36.655549012406965 ], [ -4.591932588546345, 36.59560566932587 ], [ -4.712587714068741, 36.600784639394902 ], [ -4.709927119633486, 36.651324571355602 ] ] ] ] } }
+]
+}
