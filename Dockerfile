@@ -1,13 +1,15 @@
-FROM python:3.9.5-slim-buster
+FROM python:3.10-slim-buster
 
 WORKDIR sentinel2-downloads
-COPY . .
 
 RUN apt-get update && apt-get install -y git
 
-RUN python3 -m pip install "greensenti @ git+https://github.com/KhaosResearch/greensenti.git@v0.5.1"
-RUN python3 -m pip install "landcoverpy @ git+https://github.com/KhaosResearch/landcoverpy.git@v1.0.0"
+RUN python3 -m pip install "greensenti @ git+https://github.com/KhaosResearch/greensenti.git@107e0616feaafb48a7a0f825ccfcc0b04bc8a1ac"
+
+COPY requirements.txt ./requirements.txt
 
 RUN python3 -m pip install -r requirements.txt
+
+COPY . .
 
 CMD ["sh", "./execute.sh"]

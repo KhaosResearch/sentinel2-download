@@ -5,11 +5,10 @@ from enum import Enum
 from pathlib import Path
 from typing import List, Optional
 
-import geojson as GeoJson
 import numpy as np
 from dotenv import load_dotenv
 from greensenti.band_arithmetic import *
-from greensenti.raster import crop_by_shape, project_shape
+from greensenti.raster import apply_mask
 from minio import Minio
 from pymongo import MongoClient
 import typer
@@ -23,29 +22,6 @@ class NotValidScheme(Exception):
     """
 
     pass
-
-
-def apply_mask(
-    filename: Path = typer.Argument(
-        ..., exists=True, file_okay=True, help="Path to input file"
-    ),
-    geojson: GeoJson = typer.Argument(..., help="Geojson object"),
-    output: Path = typer.Option(..., help="Path to output file"),
-) -> Path:
-    """
-    Crop image data (jp2 imagery file) by shape.
-    :return: Path to output file.
-    """
-    # makes sure the output dir exists
-    if not output.parent.is_dir():
-        output.parent.mkdir(parents=True)
-
-    shape = project_shape(geojson["features"][0]["geometry"])
-
-    # mask product based on location
-    crop_by_shape(filename=str(filename), outfile=str(output), geom=shape)
-
-    return output
 
 
 class Index(str, Enum):
@@ -144,13 +120,10 @@ def index_calculation(
 
     # Load geojson object from the input file
     if geojson_file:
-        with open(geojson_file) as geo_d:
-            geojson = json.load(geo_d)
         # Obtain the geojson identifier
         geojson_id = str(geojson_file).split("/")[-1].split(".")[0]
 
     else:
-        geojson = None
         geojson_id = None
 
     # Connect to Mongo
@@ -179,7 +152,7 @@ def index_calculation(
         product_data = mongo_col.find_one({"id": uid})
 
         if product_data:
-            if not geojson:
+            if not geojson_id:
                 for idx in index:
                     # Obtain the raw index dictionary
                     raster_index_dict = next(
@@ -267,7 +240,7 @@ def index_calculation(
                         masked_tif_local_dir = product_dir + "/" + masked_tif_filename
                         apply_mask(
                             filename=Path(tif_local_dir),
-                            geojson=geojson,
+                            geojson=geojson_file,
                             output=Path(masked_tif_local_dir),
                         )
 
