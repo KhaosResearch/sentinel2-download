@@ -2,6 +2,7 @@ import os
 import shutil
 from enum import Enum
 from pathlib import Path
+from datetime import datetime
 
 from dotenv import load_dotenv
 from greensenti.band_arithmetic import *
@@ -91,7 +92,7 @@ def calculate_raw_index(
     # Find if the file is already unzipped in the temporary folder
     temp_dir = str(temp_dir)
     title = product_data["title"]
-    unzip_folder = temp_dir + "/" + title + ".SAFE"
+    unzip_folder = temp_dir + "/" + title
     exists_unzip = Path(unzip_folder + "/GRANULE").is_dir()
 
     # Declare function for image search
@@ -124,8 +125,8 @@ def calculate_raw_index(
     Path(indexes_folder).mkdir(exist_ok=True, parents=True)
 
     # Determine the Minio folder
-    year = product_data["date"].strftime("%Y")
-    month = product_data["date"].strftime("%B")
+    year = datetime.strptime(product_data["date"], "%Y-%m-%dT%H:%M:%S.%fZ").strftime("%Y")
+    month = datetime.strptime(product_data["date"], "%Y-%m-%dT%H:%M:%S.%fZ").strftime("%B")
     minio_dir = year + "/" + month + "/"
     bands_dir = minio_dir + title + "/raw/"
 

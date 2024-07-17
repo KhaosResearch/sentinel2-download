@@ -1,6 +1,10 @@
 # Green-Senti's Sentinel-2 product download script
 This repository includes the necessary code for downloading Sentinel-2 products for the geojson geometries at [geojson](geojson). It downloads, computes the specified list of satellite indices, and crops the product to the geojson area. The products are stored in MinIO and the metadata are stored in MongoDB. 
 
+> [!WARNING]  
+> Sentinelsat is no longer supported and the Copernicous DHUS has shutdown.
+> Currently the only script working is the new `simple_script.py` which does not filter clouds or retries on failure.
+
 ## Configuration files
 This script falls back to a Google Cloud endpoint for downloading products, as Copernicus' DHUS provides a worse performance. A file named `etc-uma-88a65f4add8a.json`, and the `.env` file including all the environment variables have been saved in the group's private NAS at this path `/backup/greensenti-download-script`.
 

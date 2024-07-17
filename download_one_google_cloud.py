@@ -11,12 +11,24 @@ from dotenv import load_dotenv
 from minio import Minio
 from pymongo import MongoClient
 from google.cloud import storage
-from sentinelsat.sentinel import SentinelAPI
-
 from raw_index_calculation import calculate_raw_index
 
 load_dotenv()
 
+
+def get_gcloud_path(title: str) -> str:
+    """
+    Gets the Google cloud bucket prefix for a given Sentinel-2 product.
+    Products are group by tile id or MGRS coordinates.
+
+    :param title: Sentinel-2 title.
+    :return: Google Cloud path for title.
+    """
+    tile_id = title.split("_T")[1]  # This is always a 2 digit and 3 letter ID  E.g: 30SUF
+    tile_number = str(tile_id[0:2])
+    tile_type = str(tile_id[2])
+    tile_subtype = str(tile_id[3:5])
+    return "/".join(["L2/tiles", tile_number, tile_type, tile_subtype, f"{title}.SAFE"])
 
 def download_one_google_cloud(
     calculate_raw_indexes: bool,
@@ -60,21 +72,7 @@ def download_one_google_cloud(
         secure=False,
     )
 
-    sentinel_api = SentinelAPI(
-        dhus_username,
-        dhus_password,
-        dhus_host,
-        show_progressbars=False,
-    )
-
-    if metadata == {}:
-        products = sentinel_api.query(filename=product_title + "*")
-        products_df = sentinel_api.to_dataframe(products)
-        uid = products_df["uuid"][0]
-        product_sentinel_data = sentinel_api.get_product_odata(uid, full=True)
-
-    else:
-        product_sentinel_data = metadata
+    product_sentinel_data = metadata
 
     # Connect with google cloud
     storage_client = storage.Client()
@@ -122,20 +120,32 @@ def download_one_google_cloud(
             # The name for the new bucket
             bucket = storage_client.bucket(bucket_name)
             blobs = bucket.list_blobs(prefix=source_blob_name)
-            for blob in blobs:
-                if blob.name.endswith("/"):
-                    continue
-                file_split = blob.name.split("/")
-                directory = "/".join(file_split[0:-1])
-                dir = temp_dir + "/" + directory
-                Path(dir).mkdir(parents=True, exist_ok=True)
-                blob.download_to_filename(temp_dir + "/" + blob.name)
 
+            product_folder = Path(source_blob_name).name.removesuffix(".SAFE")
+
+
+            for blob in blobs:
+                if blob.name.endswith("/") or blob.name.endswith("$folder$"):  # Ignore folders and GCloud files
+                    continue
+
+                # Prepare path to local file
+                output_folder = Path(temp_dir).resolve() / product_folder
+                local_blob_name = Path(blob.name.removeprefix(source_blob_name + "/"))
+                local_blob_path = output_folder / local_blob_name
+
+                # Make sure output folder exists
+                local_blob_path.parent.mkdir(parents=True, exist_ok=True)
+
+                # Download if doesn't exist
+                if not Path.is_file(local_blob_path):
+                    blob.download_to_filename(local_blob_path)
+                else:
+                    print("File exists, skipping")
             # Upload product zip file to minio
             shutil.make_archive(
                 temp_dir + "/" + product_title,
                 "zip",
-                temp_dir + "/" + source_blob_name + ".SAFE",
+                output_folder,
             )
             client.fput_object(
                 minio_bucket_name,
@@ -157,16 +167,11 @@ def download_one_google_cloud(
             print(f"Bucket {minio_bucket_name} already exists")
 
         # # Prepare dictionary to save in mongo
-        product_as_dict = dict()
+        product_as_dict = product_sentinel_data
         product_as_dict.setdefault("indexes", [])
 
         # # Append product metadata
-        product_as_dict["id"] = product_sentinel_data["id"]
-        product_as_dict["title"] = product_title
-        product_as_dict["size"] = product_sentinel_data["size"]
-        product_as_dict["date"] = product_sentinel_data["date"]
-        product_as_dict["creationDate"] = product_sentinel_data["Creation Date"]
-        product_as_dict["ingestionDate"] = product_sentinel_data["Ingestion Date"]
+        product_as_dict["date"] = product_as_dict["OriginDate"]
         product_as_dict["objectName"] = str(product_dir)
         product_as_dict["processingLevel"] = int(product_title.split("_")[3][2:])
 
