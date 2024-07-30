@@ -4,6 +4,8 @@ from pathlib import Path
 import geojson
 import geomet.wkt
 import re
+import os
+import shutil
 
 def to_wkt(geojson_file: Path, decimals: int = 4) -> str:
     with open(geojson_file) as f:
@@ -18,7 +20,7 @@ def to_wkt(geojson_file: Path, decimals: int = 4) -> str:
     return wkt
 
 footprint = to_wkt("./geojson/andalucia.geojson")
-from_date = "2000-07-07"
+from_date = "2018-12-01"
 to_date = "2029-07-17"
 response = requests.get(
     f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name eq 'SENTINEL-2' and contains(Name,'MSIL2A') and OData.CSC.Intersects(area=geography'SRID=4326;{footprint}') and ContentDate/Start gt {from_date}T00:00:00.000Z and ContentDate/Start lt {to_date}T00:00:00.000Z&$top=1000"
@@ -28,3 +30,5 @@ for product in response:
     product["title"] = product["Name"]
 
     download_one_google_cloud(True, product["title"], temp_dir="/home/khaosadmin/tmp_products/", metadata=product)
+    shutil.rmtree("/home/khaosadmin/tmp_products/")
+    os.mkdir("/home/khaosadmin/tmp_products/")
