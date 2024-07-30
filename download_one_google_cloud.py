@@ -120,14 +120,13 @@ def download_one_google_cloud(
             # The name for the new bucket
             bucket = storage_client.bucket(bucket_name)
             blobs = list(bucket.list_blobs(prefix=source_blob_name))
-            print(len(blobs))
+
             product_folder = Path(source_blob_name).name.removesuffix(".SAFE")
 
             if len(blobs) == 0:
                 print("Product not found in Google Cloud")
                 print("Failing blob name: " + source_blob_name + " title: " + product_title)
                 return
-
             for blob in blobs:
                 if blob.name.endswith("/") or blob.name.endswith("$folder$"):  # Ignore folders and GCloud files
                     continue
