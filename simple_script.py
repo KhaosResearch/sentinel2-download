@@ -30,7 +30,8 @@ def to_wkt(geojson_file: Path, decimals: int = 4) -> str:
 def main():
     # Configuración de argparse para recibir argumentos desde la línea de comandos
     parser = argparse.ArgumentParser(description="Descarga productos Sentinel-2 desde Copernicus utilizando parámetros específicos.")
-    parser.add_argument("--geojson", type=str, required=True, help="Ruta al archivo GeoJSON.")
+    parser.add_argument("--geojson", type=str, required=False, default=None, help="Ruta al archivo GeoJSON.")
+    parser.add_argument("--tile", type=str, required=False, default=None, help="ID del tile como alternativa al geojson.")
     parser.add_argument("--from-date", type=str, required=True, help="Fecha de inicio en formato aaaa-mm-dd.")
     parser.add_argument("--to-date", type=str, required=True, help="Fecha de fin en formato aaaa-mm-dd.")
     
@@ -38,24 +39,36 @@ def main():
 
     # Uso de los argumentos proporcionados
     geojson_path = args.geojson
+    tile_id = args.tile
     from_date = args.from_date
     to_date = args.to_date
-
-    footprint = to_wkt(Path(geojson_path))
-
-    # Petición a la API de Copernicus utilizando los parámetros proporcionados
-    response = requests.get(
-        f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name eq 'SENTINEL-2' and contains(Name,'MSIL2A') and OData.CSC.Intersects(area=geography'SRID=4326;{footprint}') and ContentDate/Start gt {from_date}T00:00:00.000Z and ContentDate/Start lt {to_date}T00:00:00.000Z&$top=1000"
-    ).json()["value"]
-
+    
+    if geojson_path is None and tile_id is None:
+        raise ValueError("Debe proporcionar un archivo GeoJSON o un ID de tile.")
+    
+    if geojson_path is not None and tile_id is not None:
+        raise ValueError("Debe proporcionar un archivo GeoJSON o un ID de tile, no ambos.")
+    
+    if geojson_path is not None:
+        footprint = to_wkt(Path(geojson_path))
+        # Petición a la API de Copernicus
+        response = requests.get(
+            f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name eq 'SENTINEL-2' and contains(Name,'MSIL2A') and OData.CSC.Intersects(area=geography'SRID=4326;{footprint}') and ContentDate/Start gt {from_date}T00:00:00.000Z and ContentDate/Start lt {to_date}T00:00:00.000Z&$top=1000"
+        ).json()["value"]
+    else:
+        response = requests.get(
+            f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name eq 'SENTINEL-2' and contains(Name,'MSIL2A') and contains(Name,'{tile_id}') and ContentDate/Start gt {from_date}T00:00:00.000Z and ContentDate/Start lt {to_date}T00:00:00.000Z&$top=1000"
+        ).json()["value"]
+        
+        
     tiles = set()
     for product in response:
-        product["title"] = product["Name"]
+        product["title"] = product["Name"].replace(".SAFE", "")
         tiles.add(product["title"].split("_T")[1][0:5])
 
-        download_one_google_cloud(False, product["title"], temp_dir="/home/khaosadmin/tmp_products/", metadata=product)
-        shutil.rmtree("/home/khaosadmin/tmp_products/")
-        os.mkdir("/home/khaosadmin/tmp_products/")
+        #download_one_google_cloud(False, True, product["title"], temp_dir="./tmp_products/", metadata=product)
+        shutil.rmtree("./tmp_products/")
+        os.mkdir("./tmp_products/")
         
     # 1. Conectar a las bases de datos
     ## Connect with mongo
@@ -94,7 +107,7 @@ def main():
             mongo_collection=mongo_col,
             start_date=from_date,
             end_date=to_date,
-            cloud_percentage=100
+            cloud_percentage=30
         )
         
         # 3. Hacer composite

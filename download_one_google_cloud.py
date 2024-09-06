@@ -4,9 +4,11 @@ from typing import Dict, Optional
 import zipfile
 import datetime
 import typer
+import numpy as np
+import rasterio
 from datetime import datetime
 from pathlib import Path
-
+from operator import mul
 from dotenv import load_dotenv
 from minio import Minio
 from pymongo import MongoClient
@@ -30,8 +32,24 @@ def get_gcloud_path(title: str) -> str:
     tile_subtype = str(tile_id[3:5])
     return "/".join(["L2/tiles", tile_number, tile_type, tile_subtype, f"{title}.SAFE"])
 
+def calculate_no_data(folder: str) -> float:
+    
+    band_dir = list(Path(folder).glob("GRANULE/*/IMG_DATA/R10m/*.jp2"))[0]
+    with rasterio.open(band_dir) as band:
+        # Get the number of pixel in the band
+        if len(band.shape) == 2:
+            n_pixeles = mul(*np.shape(band))
+        if len(band.shape) == 3:
+            n_pixeles = np.shape(band)[1] * np.shape(band)[2]
+            
+        # Calculates percentage of no data
+        percentage = (n_pixeles - np.count_nonzero(band)) * 100 / n_pixeles
+        
+    return percentage
+
 def download_one_google_cloud(
     calculate_raw_indexes: bool,
+    calculate_intermediate_products: bool,
     product_title: str,
     temp_dir: str = "data",
     mongo_host: str = os.environ.get("MONGO_HOST"),
@@ -78,10 +96,11 @@ def download_one_google_cloud(
     storage_client = storage.Client()
     bucket_name = google_cloud_bucket_name
     splits = product_title.split("_T")
+    tile_id = str(splits[1][0:5])
     tile_number = str(splits[1][0:2])
     tile_type = str(splits[1][2])
     tile_subtype = str(splits[1][3:5])
-    list_of_names = ["L2/tiles", tile_number, tile_type, tile_subtype, product_title]
+    list_of_names = ["L2/tiles", tile_number, tile_type, tile_subtype, product_title + ".SAFE"]
     delimiter = "/"
     source_blob_name = delimiter.join(list_of_names)
 
@@ -90,13 +109,12 @@ def download_one_google_cloud(
     splits_check = product_title.split("_")
     year = splits_check[2][0:4]
     month = datetime.strptime(splits_check[2][4:6], "%m")
-    minio_dir = year + "/" + month.strftime("%B") + "/"
-    zip_file = product_title + ".zip"
+    minio_dir = tile_id + "/" + year + "/" + month.strftime("%B") + "/products/"
 
     minio_found = False
 
     try:
-        client.stat_object(minio_bucket_name, minio_dir + zip_file)
+        client.stat_object(minio_bucket_name, minio_dir + product_title + ".zip")
         minio_found = True
     except Exception as e:
         print("Zip file is not in MinIO")
@@ -108,20 +126,25 @@ def download_one_google_cloud(
     else:
         temp_dir = str(temp_dir)
         unzip_folder = temp_dir + "/" + product_title + ".SAFE"
-        product_dir = temp_dir + "/" + zip_file
+        product_dir = temp_dir + "/" + product_title + ".zip"
 
         # Download product
         if minio_found:
             print(
                 "The product is already in minio. The download is made from the database"
             )
-            client.fget_object(minio_bucket_name, minio_dir + zip_file, product_dir)
+            client.fget_object(minio_bucket_name, minio_dir + product_title + ".zip", product_dir)
+            
+            print("Unzipping " + product_title)
+            with zipfile.ZipFile(Path(product_dir), "r") as zip_file_object:
+                zip_file_object.extractall(unzip_folder)
+                
         else:
             # The name for the new bucket
             bucket = storage_client.bucket(bucket_name)
             blobs = list(bucket.list_blobs(prefix=source_blob_name))
 
-            product_folder = Path(source_blob_name).name.removesuffix(".SAFE")
+            product_folder = Path(source_blob_name).name
 
             if len(blobs) == 0:
                 print("Product not found in Google Cloud")
@@ -152,32 +175,22 @@ def download_one_google_cloud(
             )
             client.fput_object(
                 minio_bucket_name,
-                minio_dir + zip_file,
+                minio_dir + product_title + ".zip",
                 product_dir,
                 content_type="application/zip",
             )
 
-        if not os.path.exists(unzip_folder):
-            print("Unzipping " + product_title)
-            with zipfile.ZipFile(Path(product_dir), "r") as zip_file_object:
-                zip_file_object.extractall(unzip_folder)
-
-        # Make 'minio_bucket_name' bucket if not exist.
-        found = client.bucket_exists(minio_bucket_name)
-        if not found:
-            client.make_bucket(minio_bucket_name)
-        else:
-            print(f"Bucket {minio_bucket_name} already exists")
-
         # # Prepare dictionary to save in mongo
         product_as_dict = product_sentinel_data
         product_as_dict.setdefault("indexes", [])
+        product_as_dict.setdefault("intermediate_products", [])
 
         # # Append product metadata
         product_as_dict["date"] = product_as_dict["OriginDate"]
         product_as_dict["objectName"] = str(product_dir)
         product_as_dict["processingLevel"] = int(product_title.split("_")[3][2:])
-
+        product_as_dict["noDataPercentage"] = calculate_no_data(unzip_folder)
+        
         # # Upload bands
         images = Path(unzip_folder).glob("GRANULE/*/IMG_DATA/**/*.jp2")
 
@@ -192,7 +205,7 @@ def download_one_google_cloud(
 
         upload_minio = False
         try:
-            client.stat_object(minio_bucket_name, minio_dir + zip_file)
+            client.stat_object(minio_bucket_name, minio_dir + product_title + ".zip")
             upload_minio = True
         except Exception as e:
             print("Zip file is not in MinIO. The upload to Mongo cannot be performed")
@@ -217,8 +230,6 @@ def download_one_google_cloud(
                     "NDWI",
                     "NDSI",
                     "EVI",
-                    "Cover-Percentage",
-                    "Cloud-Mask",
                     "OSAVI",
                     "EVI2",
                     "NDRE",
@@ -243,6 +254,27 @@ def download_one_google_cloud(
                 minio_access_key=minio_access_key,
                 minio_secret_key=minio_secret_key,
                 minio_bucket_name=minio_bucket_name,
+            )
+        
+        if calculate_intermediate_products:
+            calculate_raw_index(
+                product_title=product_title,
+                index=[
+                    "Cloud-Mask",
+                ],
+                temp_dir=temp_dir,
+                mongo_host=mongo_host,
+                mongo_port=mongo_port,
+                mongo_username=mongo_username,
+                mongo_password=mongo_password,
+                mongo_database_name=mongo_database_name,
+                mongo_collection_name=mongo_collection_name,
+                minio_host=minio_host,
+                minio_port=minio_port,
+                minio_access_key=minio_access_key,
+                minio_secret_key=minio_secret_key,
+                minio_bucket_name=minio_bucket_name,
+                minio_folder_name="intermediate_products",
             )
 
         # Remove product from local folder

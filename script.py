@@ -123,6 +123,7 @@ def script(
             print("TITLE: ", title)
             download_one_google_cloud(
                 calculate_raw_indexes=calculate_raw_indexes,
+                calculate_intermediate_products=calculate_raw_indexes,
                 product_title=title,
                 temp_dir=temp_dir,
                 mongo_host=mongo_host,

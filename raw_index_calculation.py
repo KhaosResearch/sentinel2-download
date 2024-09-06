@@ -72,6 +72,7 @@ def calculate_raw_index(
     minio_access_key: str = os.environ.get("MINIO_ACCESS_KEY"),
     minio_secret_key: str = os.environ.get("MINIO_SECRET_KEY"),
     minio_bucket_name: str = os.environ.get("MINIO_BUCKET_NAME"),
+    minio_folder_name: str = "indexes",
 ):
     """
     Example: python raw_index_calculation.py --uid dad7f379-de8c-49ec-b4cf-44348d0f418c --index ndvi --index ndsi --temp-dir ./data
@@ -92,7 +93,7 @@ def calculate_raw_index(
     # Find if the file is already unzipped in the temporary folder
     temp_dir = str(temp_dir)
     title = product_data["title"]
-    unzip_folder = temp_dir + "/" + title
+    unzip_folder = temp_dir + "/" + title + ".SAFE"
     exists_unzip = Path(unzip_folder + "/GRANULE").is_dir()
 
     # Declare function for image search
@@ -121,13 +122,14 @@ def calculate_raw_index(
     )
 
     # Create folder to store tif files
-    indexes_folder = unzip_folder + "/INDEXES"
+    indexes_folder = unzip_folder + "/" + minio_folder_name
     Path(indexes_folder).mkdir(exist_ok=True, parents=True)
 
     # Determine the Minio folder
     year = datetime.strptime(product_data["date"], "%Y-%m-%dT%H:%M:%S.%fZ").strftime("%Y")
     month = datetime.strptime(product_data["date"], "%Y-%m-%dT%H:%M:%S.%fZ").strftime("%B")
-    minio_dir = year + "/" + month + "/"
+    tile_id = product_data["title"].split("_T")[1][0:5]
+    minio_dir = tile_id + "/" + year + "/" + month + "/products/"
     bands_dir = minio_dir + title + "/raw/"
 
     def get_index(index_name, bands_dict, download_first):
@@ -275,7 +277,7 @@ def calculate_raw_index(
 
         metadata_path = "minio://" + minio_bucket_name + "/"
         tif_minio_path = (
-            minio_dir + title + "/indexes/" + title + "/" + index_name + ".tif"
+            minio_dir + title + "/" + minio_folder_name + "/" + index_name + ".tif"
         )
 
         tif_meta_minio_path = metadata_path + tif_minio_path
@@ -313,7 +315,7 @@ def calculate_raw_index(
         raster_index_dict = next(
             (
                 item
-                for item in product_data["indexes"]
+                for item in product_data[minio_folder_name.lower()]
                 if item["name"] == index_name and item["mask"] == None
             ),
             None,
@@ -332,7 +334,7 @@ def calculate_raw_index(
             print("The index " + index_name + " is already calculated")
 
     mongo_col.update_one(
-        {"title": product_title}, {"$push": {"indexes": {"$each": l_indexes}}}
+        {"title": product_title}, {"$push": {minio_folder_name.lower(): {"$each": l_indexes}}}
     )
 
     if not exists_unzip:
