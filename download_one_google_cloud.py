@@ -183,10 +183,10 @@ def download_one_google_cloud(
         # # Prepare dictionary to save in mongo
         product_as_dict = product_sentinel_data
         product_as_dict.setdefault("indexes", [])
-        product_as_dict.setdefault("intermediate_products", [])
+        product_as_dict.setdefault("intermediateProducts", [])
 
         # # Append product metadata
-        product_as_dict["date"] = product_as_dict["OriginDate"]
+        product_as_dict["date"] = product_as_dict["originDate"]
         product_as_dict["objectName"] = str(product_dir)
         product_as_dict["processingLevel"] = int(product_title.split("_")[3][2:])
         product_as_dict["noDataPercentage"] = calculate_no_data(unzip_folder)

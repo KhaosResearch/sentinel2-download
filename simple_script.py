@@ -1,19 +1,19 @@
 import argparse
-
-from pymongo import MongoClient
-from download_one_google_cloud import download_one_google_cloud
-import requests
-from pathlib import Path
-import geojson
-import geomet.wkt
-import re
 import os
+import re
 import shutil
-from minio import Minio
-from landcoverpy.utilities.utils import get_products_by_tile_and_date
-from landcoverpy.composite import _create_composite, _get_id_composite
+from pathlib import Path
+
+import geomet.wkt
+import requests
+from dateutil import parser as dparser
 from landcoverpy.execution_mode import ExecutionMode
-from landcoverpy import raw_index_calculation_composite
+from minio import Minio
+from pymongo import MongoClient
+
+import geojson
+from download_one_google_cloud import download_one_google_cloud
+from landcoverpy_cover import create_composite, get_products_by_tile_and_date
 
 def to_wkt(geojson_file: Path, decimals: int = 4) -> str:
     with open(geojson_file) as f:
@@ -26,6 +26,13 @@ def to_wkt(geojson_file: Path, decimals: int = 4) -> str:
     # Strip unnecessary spaces
     wkt = re.sub(r"(?<!\d) ", "", wkt)
     return wkt
+
+def dict_to_camel_case_and_str_to_date(d: dict) -> dict:
+    new_dict = {}
+    for k, v in d.items():
+        new_key = k[0].lower() + k[1:] if k else k
+        new_dict[new_key] = dict_to_camel_case_and_str_to_date(v) if isinstance(v, dict) else (v if "date" not in k.lower() else dparser.parse(v))
+    return new_dict
 
 def main():
     # Configuración de argparse para recibir argumentos desde la línea de comandos
@@ -62,13 +69,16 @@ def main():
         
         
     tiles = set()
+    tmp_dir = os.environ.get("TMP_DIR")
+    os.mkdir(tmp_dir)
     for product in response:
-        product["title"] = product["Name"].replace(".SAFE", "")
-        tiles.add(product["title"].split("_T")[1][0:5])
+        camel_case_product = dict_to_camel_case_and_str_to_date(product)
+        camel_case_product["title"] = camel_case_product["name"].replace(".SAFE", "")
+        tiles.add(camel_case_product["title"].split("_T")[1][0:5])
 
-        #download_one_google_cloud(False, True, product["title"], temp_dir="./tmp_products/", metadata=product)
-        shutil.rmtree("./tmp_products/")
-        os.mkdir("./tmp_products/")
+        download_one_google_cloud(False, True, camel_case_product["title"], temp_dir=tmp_dir, metadata=camel_case_product)
+    shutil.rmtree(tmp_dir)
+        
         
     # 1. Conectar a las bases de datos
     ## Connect with mongo
@@ -105,8 +115,8 @@ def main():
         composite_products = get_products_by_tile_and_date(
             tile=tile,
             mongo_collection=mongo_col,
-            start_date=from_date,
-            end_date=to_date,
+            start_date=dparser.parse(from_date),
+            end_date=dparser.parse(to_date),
             cloud_percentage=30
         )
         
@@ -116,19 +126,15 @@ def main():
         minio_composite_bucket_name = os.environ.get("MINIO_COMPOSITE_BUCKET_NAME")
         mongo_composite_collection_name = os.environ.get("MONGO_COMPOSITE_COLLECTION_NAME")
         execution_mode = ExecutionMode.LAND_COVER_PREDICTION
-        _create_composite(
-            products_metadata=composite_products,
+        products_metadata = list(composite_products)
+        create_composite(
+            products_metadata=products_metadata,
             minio_client=minio_client,
             bucket_products=minio_bucket_name,
             bucket_composites=minio_composite_bucket_name,
             mongo_composites_collection=mongo_db[mongo_composite_collection_name],
             execution_mode=execution_mode
         )
-        
-        # 4. Calcular índices del composite
-        raw_index_calculation_composite(_get_id_composite(
-                    [product_metadata["id"] for product_metadata in composite_products], execution_mode
-                ))
 
 if __name__ == "__main__":
     main()

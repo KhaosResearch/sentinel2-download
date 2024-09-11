@@ -126,8 +126,8 @@ def calculate_raw_index(
     Path(indexes_folder).mkdir(exist_ok=True, parents=True)
 
     # Determine the Minio folder
-    year = datetime.strptime(product_data["date"], "%Y-%m-%dT%H:%M:%S.%fZ").strftime("%Y")
-    month = datetime.strptime(product_data["date"], "%Y-%m-%dT%H:%M:%S.%fZ").strftime("%B")
+    year = product_data["date"].strftime("%Y")
+    month = product_data["date"].strftime("%B")
     tile_id = product_data["title"].split("_T")[1][0:5]
     minio_dir = tile_id + "/" + year + "/" + month + "/products/"
     bands_dir = minio_dir + title + "/raw/"
@@ -307,6 +307,8 @@ def calculate_raw_index(
 
     # Create list of indexes
     l_indexes = []
+    mfn_splitted = minio_folder_name.split('_')
+    indexes_mongo_key = mfn_splitted[0] + ''.join(ele.title() for ele in mfn_splitted[1:])
 
     for idx in index:
         index_name = idx.lower()
@@ -315,7 +317,7 @@ def calculate_raw_index(
         raster_index_dict = next(
             (
                 item
-                for item in product_data[minio_folder_name.lower()]
+                for item in product_data[indexes_mongo_key]
                 if item["name"] == index_name and item["mask"] == None
             ),
             None,
@@ -334,7 +336,7 @@ def calculate_raw_index(
             print("The index " + index_name + " is already calculated")
 
     mongo_col.update_one(
-        {"title": product_title}, {"$push": {minio_folder_name.lower(): {"$each": l_indexes}}}
+        {"title": product_title}, {"$push": {indexes_mongo_key: {"$each": l_indexes}}}
     )
 
     if not exists_unzip:
