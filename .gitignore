@@ -7,3 +7,6 @@ __pycache__
 
 # Enviroment
 *.env
+
+# Google Cloud User Credentials
+gcloud-user.json

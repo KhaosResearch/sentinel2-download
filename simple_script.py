@@ -12,7 +12,7 @@ from minio import Minio
 from pymongo import MongoClient
 
 import geojson
-from download_one_google_cloud import download_one_google_cloud
+from download_from_google_cloud import download_one_google_cloud
 from landcoverpy_cover import create_composite, get_products_by_tile_and_date
 
 def to_wkt(geojson_file: Path, decimals: int = 4) -> str:
@@ -78,6 +78,16 @@ def main():
 
         download_one_google_cloud(False, True, camel_case_product["title"], temp_dir=tmp_dir, metadata=camel_case_product)
     shutil.rmtree(tmp_dir)
+
+            # # Prepare dictionary to save in mongo
+        product_as_dict = metadata
+        product_as_dict.setdefault("intermediateProducts", [])
+        print(product_as_dict)
+        # # Append product metadata
+        product_as_dict["date"] = product_as_dict["originDate"]
+        product_as_dict["objectName"] = str(product_dir)
+        product_as_dict["processingLevel"] = int(product_title.split("_")[3][2:])
+        product_as_dict["noDataPercentage"] = calculate_no_data(unzip_folder)
         
         
     # 1. Conectar a las bases de datos

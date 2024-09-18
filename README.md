@@ -12,7 +12,6 @@ This script falls back to a Google Cloud endpoint for downloading products, as C
 The required dependencies can be found at [requirements.txt](requirements.txt). However, there is an additional one that refers to a specific commit in the package's git repository (https://github.com/KhaosResearch/greensenti/commit/107e0616feaafb48a7a0f825ccfcc0b04bc8a1ac). Therefore, all dependencies can be installed as follows:
 
 ```sh
-$ python3 -m pip install "greensenti @ git+https://github.com/KhaosResearch/greensenti.git@107e0616feaafb48a7a0f825ccfcc0b04bc8a1ac"
 $ python3 -m pip install -r requirements.txt
 ```
 
