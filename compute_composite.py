@@ -24,15 +24,12 @@ def _get_kwargs_raster(raster_path):
         return kwargs
     
 def _get_product_rasters_paths(
-    product_metadata: dict, minio_client: MinioConnection, is_composite: bool
+    product_title: str, minio_client: MinioConnection, is_composite: bool
 ) -> Tuple[Iterable[str], Iterable[bool]]:
     """
     Get the paths to all rasters of a product in minio.
     Another list of boolean is returned, it points out if each raster is a sentinel band or not (e.g. index).
     """
-    product_title = product_metadata["title"]
-    product_dir = None
-
     splits = product_title.split("_T")
     tile_id = str(splits[1][0:5])
     year = splits[2][0:4]
@@ -44,7 +41,7 @@ def _get_product_rasters_paths(
 
     bands_dir = join(minio_dir, "raw", "")
     indexes_dir = join(minio_dir, "indexes", "")
-    intermediate_products_dir = join(minio_dir, "intermediate_products", "")
+    intermediate_products_dir = join(minio_dir, "intermediateProducts", "")
 
     bands_paths = minio_client.list_objects(minio_bucket, prefix=bands_dir)
     indexes_path = minio_client.list_objects(minio_bucket, prefix=indexes_dir)
@@ -96,7 +93,7 @@ def _sentinel_date_to_datetime(date: str):
 def _rescale_band(
     band: np.ndarray,
     kwargs: dict,
-    spatial_resol: int,
+    spatial_resol: int = 10,
 ):
     img_resolution = kwargs["transform"][0]
 
@@ -304,7 +301,7 @@ def _create_composite(
         products_tiles.append(product_title.split("_")[5])
 
         (rasters_paths, is_band) = _get_product_rasters_paths(
-            product_metadata, minio_client, bucket_products
+            product_metadata["title"], minio_client, bucket_products
         )
         bands_paths_product = list(compress(rasters_paths, is_band))
         bands_paths_products.append(bands_paths_product)

@@ -35,14 +35,11 @@ def calculate_no_data(folder: str) -> float:
     
     band_dir = list(Path(folder).glob("GRANULE/*/IMG_DATA/R10m/*.jp2"))[0]
     with rasterio.open(band_dir) as band:
-        # Get the number of pixel in the band
-        if len(band.shape) == 2:
-            n_pixeles = mul(*np.shape(band))
-        if len(band.shape) == 3:
-            n_pixeles = np.shape(band)[1] * np.shape(band)[2]
-            
-        # Calculates percentage of no data
-        percentage = (n_pixeles - np.count_nonzero(band)) * 100 / n_pixeles
+
+        n_pixels = np.prod(band.shape)
+        
+        no_data_count = n_pixels - np.count_nonzero(band.read(1))
+        percentage = (no_data_count * 100) / n_pixels
         
     return percentage
 
@@ -60,7 +57,7 @@ def download_one_google_cloud(
     minio_client = MinioConnection()
 
     # Connect with google cloud
-    storage_client = storage.minio_client()
+    storage_client = storage.Client()
     bucket_name = os.environ.get("GOOGLE_CLOUD_BUCKET_NAME") 
 
     tmp_dir = os.environ.get("TMP_DIR")
@@ -113,7 +110,7 @@ def download_one_google_cloud(
             print(blob.name)
             # Prepare path to local file
             output_folder = join(tmp_dir, product_folder)
-            local_blob_name = Path(blob.name.removeprefix(source_blob_name + "/"))
+            local_blob_name = Path(blob.name[len(source_blob_name + "/"):] if blob.name.startswith(source_blob_name + "/") else blob.name)
             local_blob_path = output_folder / local_blob_name
             local_blob_path = Path(str(local_blob_path).replace(".SAFE", ""))
 
@@ -148,7 +145,9 @@ def download_one_google_cloud(
 
         if metadata == {}:
             metadata["title"] = product_title
-        metadata["no_data_percentage"] = calculate_no_data(unzip_folder)
+        metadata["minioBucket"] = minio_client.products_bucket
+        metadata["minioBandsPath"] = join(minio_dir, product_title, "raw", "")
+        metadata["noDataPercentage"] = calculate_no_data(unzip_folder)
         mongo_col.insert_one(metadata)
 
         try:
@@ -183,7 +182,7 @@ def download_one_google_cloud(
         calculate_raw_index(
             product_title=product_title,
             index=[
-                "Cloud-Mask",
+                "CloudMask",
             ],
-            minio_folder_name="intermediate_products",
+            minio_folder_name="intermediateProducts",
         )

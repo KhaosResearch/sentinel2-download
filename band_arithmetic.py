@@ -3,13 +3,13 @@ from pathlib import Path
 import numpy as np
 import rasterio
 
-from utils_raster import rescale_band
+from compute_composite import _rescale_band
 
 # Allow division by zero.
 np.seterr(divide="ignore", invalid="ignore")
 
 
-def read(filename: str | Path) -> tuple[np.ndarray, dict]:
+def read(filename):
     """
     Read raster data from file.
     :param filename: Path to input file.
@@ -22,7 +22,7 @@ def read(filename: str | Path) -> tuple[np.ndarray, dict]:
     return B, kwargs
 
 
-def cloud_cover_percentage(b3: Path, b4: Path, b11: Path, tau: float = 0.2, *, output: Path | None = None) -> float:
+def cloud_cover_percentage(b3: Path, b4: Path, b11: Path, tau: float = 0.2, *, output: Path= None) -> float:
     """
     Computes cloud percentage of an image based on:
 
@@ -60,7 +60,7 @@ def cloud_cover_percentage(b3: Path, b4: Path, b11: Path, tau: float = 0.2, *, o
     return cc_percentage
 
 
-def cloud_mask(scl: Path, *, output: Path | None = None) -> np.ndarray:
+def cloud_mask(scl: Path, *, output: Path= None) -> np.ndarray:
     """
     Computes cloud mask of an image based on the SCL raster provided by Sentinel.
 
@@ -77,7 +77,7 @@ def cloud_mask(scl: Path, *, output: Path | None = None) -> np.ndarray:
     # Calculate cloud mask from Sentinel's cloud related values.
     mask = np.isin(mask, scl_cloud_values).astype(np.int8)
 
-    cloud_mask_10m, output_kwargs = rescale_band(mask, kwargs)
+    cloud_mask_10m, output_kwargs = _rescale_band(mask, kwargs)
 
     if output:
         output_kwargs.update(driver="GTiff", dtype=rasterio.int8, count=1)
@@ -87,7 +87,7 @@ def cloud_mask(scl: Path, *, output: Path | None = None) -> np.ndarray:
     return cloud_mask_10m
 
 
-def true_color(r: Path, g: Path, b: Path, *, output: Path | None = None) -> np.ndarray:
+def true_color(r: Path, g: Path, b: Path, *, output: Path= None) -> np.ndarray:
     """
     Computes true color image composite (RGB).
 
@@ -118,7 +118,7 @@ def true_color(r: Path, g: Path, b: Path, *, output: Path | None = None) -> np.n
     return rgb_image
 
 
-def moisture(b8a: Path, b11: Path, *, output: Path | None = None) -> np.ndarray:
+def moisture(b8a: Path, b11: Path, *, output: Path= None) -> np.ndarray:
     """
     Compute moisture index.
 
@@ -148,7 +148,7 @@ def moisture(b8a: Path, b11: Path, *, output: Path | None = None) -> np.ndarray:
     return moisture
 
 
-def ndvi(b4: Path, b8: Path, *, output: Path | None = None) -> np.ndarray:
+def ndvi(b4: Path, b8: Path, *, output: Path= None) -> np.ndarray:
     """
     Compute Normalized Difference Vegetation Index (NDVI).
 
@@ -180,7 +180,7 @@ def ndvi(b4: Path, b8: Path, *, output: Path | None = None) -> np.ndarray:
     return ndvi
 
 
-def ndsi(b3: Path, b11: Path, *, output: Path | None = None) -> np.ndarray:
+def ndsi(b3: Path, b11: Path, *, output: Path= None) -> np.ndarray:
     """
     Compute Normalized Difference Snow Index (NDSI) index.
     Values above 0.42 are usually snow.
@@ -209,7 +209,7 @@ def ndsi(b3: Path, b11: Path, *, output: Path | None = None) -> np.ndarray:
     return ndsi
 
 
-def ndwi(b3: Path, b8: Path, *, output: Path | None = None) -> np.ndarray:
+def ndwi(b3: Path, b8: Path, *, output: Path= None) -> np.ndarray:
     """
     Compute Normalized Difference Water Index (NDWI) index.
 
@@ -241,7 +241,7 @@ def ndwi(b3: Path, b8: Path, *, output: Path | None = None) -> np.ndarray:
     return ndwi
 
 
-def evi2(b4: Path, b8: Path, *, output: Path | None = None) -> np.ndarray:
+def evi2(b4: Path, b8: Path, *, output: Path= None) -> np.ndarray:
     """
     Compute Enhanced Vegetation Index 2 (EVI2) index.
 
@@ -266,7 +266,7 @@ def evi2(b4: Path, b8: Path, *, output: Path | None = None) -> np.ndarray:
     return evi2
 
 
-def osavi(b4: Path, b8: Path, Y: float = 0.16, *, output: Path | None = None) -> np.ndarray:
+def osavi(b4: Path, b8: Path, Y: float = 0.16, *, output: Path= None) -> np.ndarray:
     """
     Optimized Soil Adjusted Vegetation Index (OSAVI) index.
 
@@ -292,7 +292,7 @@ def osavi(b4: Path, b8: Path, Y: float = 0.16, *, output: Path | None = None) ->
     return osavi
 
 
-def ndre(b5: Path, b9: Path, *, output: Path | None = None) -> np.ndarray:
+def ndre(b5: Path, b9: Path, *, output: Path= None) -> np.ndarray:
     """
     Normalized Difference NIR/Rededge Normalized Difference Red-Edge (NDRE) index.
 
@@ -317,7 +317,7 @@ def ndre(b5: Path, b9: Path, *, output: Path | None = None) -> np.ndarray:
     return ndre
 
 
-def mndwi(b3: Path, b11: Path, *, output: Path | None = None) -> np.ndarray:
+def mndwi(b3: Path, b11: Path, *, output: Path= None) -> np.ndarray:
     """
     Modified NDWI (MNDWI) index.
 
@@ -342,7 +342,7 @@ def mndwi(b3: Path, b11: Path, *, output: Path | None = None) -> np.ndarray:
     return mndwi
 
 
-def bri(b3: Path, b5: Path, b8: Path, *, output: Path | None = None) -> np.ndarray:
+def bri(b3: Path, b5: Path, b8: Path, *, output: Path= None) -> np.ndarray:
     """
     Browning Reflectance Index (BRI) index.
 
@@ -354,7 +354,7 @@ def bri(b3: Path, b5: Path, b8: Path, *, output: Path | None = None) -> np.ndarr
     """
     band_3, kwargs = read(b3)
     band_5, kwargs_5 = read(b5)
-    band_5, _ = rescale_band(band_5, kwargs_5)
+    band_5, _ = _rescale_band(band_5, kwargs_5)
     band_8, _ = read(b8)
 
     bri = (1 / band_3 - 1 / band_5) / band_8
@@ -370,7 +370,7 @@ def bri(b3: Path, b5: Path, b8: Path, *, output: Path | None = None) -> np.ndarr
     return bri
 
 
-def evi(b2: Path, b4: Path, b8: Path, *, output: Path | None = None) -> np.ndarray:
+def evi(b2: Path, b4: Path, b8: Path, *, output: Path= None) -> np.ndarray:
     """
     Compute Enhanced Vegetation Index (EVI) index.
     Its value ranges from -1 to 1, with healthy vegetation generally around 0.20 to 0.80.
@@ -403,7 +403,7 @@ def evi(b2: Path, b4: Path, b8: Path, *, output: Path | None = None) -> np.ndarr
     return evi
 
 
-def ndyi(b2: Path, b3: Path, *, output: Path | None = None) -> np.ndarray:
+def ndyi(b2: Path, b3: Path, *, output: Path= None) -> np.ndarray:
     """
     Compute Normalized Difference Yellow Index (NDYI) index.
 
@@ -430,7 +430,7 @@ def ndyi(b2: Path, b3: Path, *, output: Path | None = None) -> np.ndarray:
     return ndyi
 
 
-def ri(b3: Path, b4: Path, *, output: Path | None = None) -> np.ndarray:
+def ri(b3: Path, b4: Path, *, output: Path= None) -> np.ndarray:
     """
     Compute Normalized Difference Red/Green Redness (RI) index.
 
@@ -455,7 +455,7 @@ def ri(b3: Path, b4: Path, *, output: Path | None = None) -> np.ndarray:
     return ri
 
 
-def cri1(b2: Path, b3: Path, *, output: Path | None = None) -> np.ndarray:
+def cri1(b2: Path, b3: Path, *, output: Path= None) -> np.ndarray:
     """
     Compute Carotenoid Reflectance (CRI1) index.
 
@@ -480,7 +480,7 @@ def cri1(b2: Path, b3: Path, *, output: Path | None = None) -> np.ndarray:
     return cri1
 
 
-def bsi(b2: Path, b4: Path, b8: Path, b11: Path, *, output: Path | None = None) -> np.ndarray:
+def bsi(b2: Path, b4: Path, b8: Path, b11: Path, *, output: Path= None) -> np.ndarray:
     """
     Bare Soil Index (BSI) is a numerical indicator to capture soil variations.
 
@@ -495,7 +495,7 @@ def bsi(b2: Path, b4: Path, b8: Path, b11: Path, *, output: Path | None = None) 
     band_4, _ = read(b4)
     band_8, _ = read(b8)
     band_11, kwargs_11 = read(b11)
-    band_11, _ = rescale_band(band_11, kwargs_11)
+    band_11, _ = _rescale_band(band_11, kwargs_11)
 
     bsi = ((band_11 + band_4) - (band_8 + band_2)) / ((band_11 + band_4) + (band_8 + band_2))
 

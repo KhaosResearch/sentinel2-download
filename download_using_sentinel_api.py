@@ -105,5 +105,5 @@ def download_product_using_sentinel_api(from_date, to_date, geojson_path=None, t
         product_metadata = dict_to_camel_case_and_str_to_date(product_metadata)
         product_metadata["title"] = product_metadata["name"].replace(".SAFE", "")
         tiles.add(product_metadata["title"].split("_T")[1][0:5])
-        download_one_google_cloud(False, True, product_metadata["title"], temp_dir=tmp_dir, metadata=product_metadata)
+        download_one_google_cloud(False, True, product_metadata["title"], metadata=product_metadata)
     shutil.rmtree(tmp_dir)
