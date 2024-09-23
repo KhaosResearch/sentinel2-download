@@ -47,7 +47,7 @@ def download_one_google_cloud(
     calculate_raw_indexes: bool,
     calculate_intermediate_products: bool,
     product_title: str,
-    metadata: dict = {}
+    sentinel_metadata: dict = {}
 ):
 
     # Connect with mongo
@@ -143,8 +143,10 @@ def download_one_google_cloud(
             print(f"Product not uploaded to MinIO")
             return
 
-        if metadata == {}:
-            metadata["title"] = product_title
+        metadata = {}
+        if sentinel_metadata != {}:
+            metadata["sentinelAPI"] = sentinel_metadata
+        metadata["title"] = product_title
         metadata["minioBucket"] = minio_client.products_bucket
         metadata["minioBandsPath"] = join(minio_dir, product_title, "raw", "")
         metadata["noDataPercentage"] = calculate_no_data(unzip_folder)
