@@ -57,9 +57,11 @@ def find_product_image(band_name: str, product_title: str) -> Path:
     :return: A Path object pointing to the first found image.
     """
     product_folder = join(os.environ.get("TMP_DIR"), product_title)
-    return ([f for f in Path(product_folder).glob("*" + band_name + ".jp2")])[0]
+    return ([f for f in Path(product_folder).glob("*" + band_name + "*")])[0]
 
 def get_index(index_name, bands_dict, product_title, minio_folder_name, is_composite):
+
+    band_extension = ".tif" if is_composite else ".jp2"
 
     indexes_folder = join(os.environ.get("TMP_DIR"), product_title, minio_folder_name)
     output = Path(indexes_folder + "/" + index_name + ".tif")
@@ -175,9 +177,12 @@ def get_index(index_name, bands_dict, product_title, minio_folder_name, is_compo
         raise e
 
     minio_client = MinioConnection()
-    minio_bucket_name = minio_client.composites_bucket if is_composite else minio_client.products_bucket
+    minio_bucket_name = minio_client.bucket_name
 
-    date = datetime.strptime(product_title.split('_')[2], "%Y%m%dT%H%M%S")
+    if is_composite:
+        date = datetime.strptime(product_title.split('_')[2], "%Y%m%d")
+    else:
+        date = datetime.strptime(product_title.split('_')[2], "%Y%m%dT%H%M%S")
     year = date.strftime("%Y")
     month = date.strftime("%B")
     tile_id = product_title.split("_T")[1][0:5]
@@ -198,14 +203,14 @@ def get_index(index_name, bands_dict, product_title, minio_folder_name, is_compo
     for k, v in bands_dict.items():
         band[k] = {}
         band[k]["rasterMinioBucket"] = minio_bucket_name
-        band[k]["rasterMinioPath"] = join(minio_dir, product_title, "raw" , v + ".jp2")
+        band[k]["rasterMinioPath"] = join(minio_dir, product_title, "raw" , v + band_extension)
 
     index_dict = {
         "name": index_name,
         "rasterMinioBucket": minio_bucket_name,
         "rasterMinioPath": tif_minio_path,
         "bands": band,
-        "value": float(index_value) if index_value is not None else index_value
+        "rasterMeanValue": float(index_value) if index_value is not None else index_value
     }
 
     return index_dict
@@ -224,9 +229,12 @@ def calculate_raw_index(
     # Connect with mongo
     if is_composite:
         mongo_col = MongoConnection().get_composite_collection_object()
-        
+        band_extension = ".tif"
+        date = datetime.strptime(product_title.split('_')[2], "%Y%m%d")        
     else:
         mongo_col = MongoConnection().get_collection_object()
+        band_extension = ".jp2"
+        date = datetime.strptime(product_title.split('_')[2], "%Y%m%dT%H%M%S")
 
     # Search product metadata in Mongo
     product_data = mongo_col.find_one({"title": product_title})
@@ -239,7 +247,6 @@ def calculate_raw_index(
     Path(indexes_folder).mkdir(exist_ok=True, parents=True)
 
     # Determine the Minio folder
-    date = datetime.strptime(product_title.split('_')[2], "%Y%m%dT%H%M%S")
     year = date.strftime("%Y")
     month = date.strftime("%B")
     tile_id = product_data["title"].split("_T")[1][0:5]
@@ -254,7 +261,7 @@ def calculate_raw_index(
         product_data[minio_folder_name] = []
 
     minio_client = MinioConnection()
-    minio_bucket_name = minio_client.composites_bucket if is_composite else minio_client.products_bucket
+    minio_bucket_name = minio_client.bucket_name
 
     for idx in index:
         index_name = idx.lower()
@@ -265,7 +272,7 @@ def calculate_raw_index(
 
         for v in indexes_bands[index_name].values():
 
-            band_file = v + ".jp2"
+            band_file = v + band_extension
             local_band_path = join(product_local_folder, band_file)
 
             if not os.path.exists(local_band_path):

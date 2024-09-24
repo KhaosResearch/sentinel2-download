@@ -8,6 +8,7 @@ from dateutil import parser as dparser
 
 import geojson
 from download_from_google_cloud import download_one_google_cloud
+from datetime import datetime
 
 def to_wkt(geojson_file: str, decimals: int = 4) -> str:
     """
@@ -90,7 +91,21 @@ def find_products_sentinel_api_by_geojson_file(geojson_path, from_date, to_date)
     ).json()["value"]
     return response
 
-def download_product_using_sentinel_api(from_date, to_date, geojson_path=None, tile_id=None):
+def download_product_using_sentinel_api(
+        calculate_raw_indexes, 
+        calculate_intermediate_products,
+        from_date, 
+        to_date, 
+        geojson_path=None, 
+        tile_id=None):
+    
+    if not isinstance(from_date, datetime):
+        raise ValueError("from_date must be a datetime object.")
+    if not isinstance(to_date, datetime):
+        raise ValueError("to_date must be a datetime object.")
+
+    from_date = from_date.strftime("%Y-%m-%d")
+    to_date = to_date.strftime("%Y-%m-%d")
     tiles = set()
     tmp_dir = os.environ.get("TMP_DIR")
     if not os.path.exists(tmp_dir):
@@ -103,7 +118,7 @@ def download_product_using_sentinel_api(from_date, to_date, geojson_path=None, t
         raise ValueError("You must provide a GeoJSON file or a tile ID.")
     for product_metadata in response:
         product_metadata = dict_to_camel_case_and_str_to_date(product_metadata)
-        product_metadata["title"] = product_metadata["name"].replace(".SAFE", "")
-        tiles.add(product_metadata["title"].split("_T")[1][0:5])
-        download_one_google_cloud(False, True, product_metadata["title"], product_metadata)
+        product_title = product_metadata["name"].replace(".SAFE", "")
+        tiles.add(product_title.split("_T")[1][0:5])
+        download_one_google_cloud(calculate_raw_indexes, calculate_intermediate_products, product_title, product_metadata)
     shutil.rmtree(tmp_dir)

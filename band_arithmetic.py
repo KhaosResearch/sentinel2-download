@@ -2,12 +2,44 @@ from pathlib import Path
 
 import numpy as np
 import rasterio
-
-from compute_composite import _rescale_band
+from rasterio.warp import Resampling, reproject
 
 # Allow division by zero.
 np.seterr(divide="ignore", invalid="ignore")
 
+def _rescale_band(
+    band: np.ndarray,
+    kwargs: dict,
+    spatial_resol: int = 10,
+):
+    img_resolution = kwargs["transform"][0]
+
+    if img_resolution != spatial_resol:
+        scale_factor = img_resolution / spatial_resol
+
+        new_kwargs = kwargs.copy()
+        new_kwargs["height"] = int(kwargs["height"] * scale_factor)
+        new_kwargs["width"] = int(kwargs["width"] * scale_factor)
+        new_kwargs["transform"] = rasterio.Affine(
+        spatial_resol, kwargs["transform"][1], kwargs["transform"][2], kwargs["transform"][3], -spatial_resol, kwargs["transform"][5])
+
+        rescaled_raster = np.ndarray(
+            shape=(kwargs["count"], new_kwargs["height"], new_kwargs["width"]), dtype=np.float32)
+
+        reproject(
+            source=band,
+            destination=rescaled_raster,
+            src_transform=kwargs["transform"],
+            src_crs=kwargs["crs"],
+            dst_resolution=(new_kwargs["width"], new_kwargs["height"]),
+            dst_transform=new_kwargs["transform"],
+            dst_crs=new_kwargs["crs"],
+            resampling=Resampling.nearest,
+        )
+        band = rescaled_raster
+        kwargs = new_kwargs
+
+    return band, kwargs
 
 def read(filename):
     """

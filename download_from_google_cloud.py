@@ -16,21 +16,6 @@ from minio_connection import MinioConnection
 
 load_dotenv()
 
-
-def get_gcloud_path(title: str) -> str:
-    """
-    Gets the Google cloud bucket prefix for a given Sentinel-2 product.
-    Products are group by tile id or MGRS coordinates.
-
-    :param title: Sentinel-2 title.
-    :return: Google Cloud path for title.
-    """
-    tile_id = title.split("_T")[1]  # This is always a 2 digit and 3 letter ID  E.g: 30SUF
-    tile_number = str(tile_id[0:2])
-    tile_type = str(tile_id[2])
-    tile_subtype = str(tile_id[3:5])
-    return "/".join(["L2/tiles", tile_number, tile_type, tile_subtype, f"{title}.SAFE"])
-
 def calculate_no_data(folder: str) -> float:
     
     band_dir = list(Path(folder).glob("GRANULE/*/IMG_DATA/R10m/*.jp2"))[0]
@@ -79,7 +64,7 @@ def download_one_google_cloud(
     minio_dir = join(tile_id, year, month.strftime("%B"), "products", "")
 
     try:
-        objects = minio_client.list_objects(minio_client.products_bucket, prefix=join(minio_dir, product_title), recursive=False)
+        objects = minio_client.list_objects(minio_client.bucket_name, prefix=join(minio_dir, product_title), recursive=False)
         for _ in objects:
             minio_found = True
             break
@@ -129,14 +114,14 @@ def download_one_google_cloud(
             image_name = os.path.basename(image).split("_", 2)[2]
             print("Uploading ", image_name, "to MinIO")
             minio_client.fput_object(
-                minio_client.products_bucket,
+                minio_client.bucket_name,
                 minio_dir + product_title + "/raw/" + image_name,
                 image,
                 content_type="image/jp2",
             )
 
         try:
-            objects = minio_client.list_objects(minio_client.products_bucket, prefix=join(minio_dir, product_title), recursive=False)
+            objects = minio_client.list_objects(minio_client.bucket_name, prefix=join(minio_dir, product_title), recursive=False)
             for _ in objects:
                 break
         except Exception:
@@ -147,9 +132,11 @@ def download_one_google_cloud(
         if sentinel_metadata != {}:
             metadata["sentinelAPI"] = sentinel_metadata
         metadata["title"] = product_title
-        metadata["minioBucket"] = minio_client.products_bucket
+        metadata["minioBucket"] = minio_client.bucket_name
         metadata["minioBandsPath"] = join(minio_dir, product_title, "raw", "")
         metadata["noDataPercentage"] = calculate_no_data(unzip_folder)
+        metadata["datetakeSensingTime"] = datetime.strptime(product_title.split("_")[2], "%Y%m%dT%H%M%S")
+
         mongo_col.insert_one(metadata)
 
         try:
@@ -157,6 +144,15 @@ def download_one_google_cloud(
                 shutil.rmtree(unzip_folder)
         except OSError as e:
             print("Error: %s - %s." % (e.filename, e.strerror))
+
+    if calculate_intermediate_products:
+        calculate_raw_index(
+            product_title=product_title,
+            index=[
+                "CloudMask",
+            ],
+            minio_folder_name="intermediateProducts",
+        )
 
     if calculate_raw_indexes:
         calculate_raw_index(
@@ -178,13 +174,4 @@ def download_one_google_cloud(
                 "BSI",
                 "CRI1"
             ],
-        )
-    
-    if calculate_intermediate_products:
-        calculate_raw_index(
-            product_title=product_title,
-            index=[
-                "CloudMask",
-            ],
-            minio_folder_name="intermediateProducts",
         )

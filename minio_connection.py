@@ -8,8 +8,7 @@ class MinioConnection(Minio):
                 port=os.environ.get("MINIO_PORT"),
                 access_key=os.environ.get("MINIO_ACCESS_KEY"),
                 secret_key=os.environ.get("MINIO_SECRET_KEY"),
-                products_bucket=os.environ.get("MINIO_BUCKET_NAME"),
-                composites_bucket=os.environ.get("MINIO_COMPOSITE_BUCKET_NAME")
+                bucket_name=os.environ.get("MINIO_BUCKET_NAME")
     ):
         super().__init__(
                     endpoint = f"{host}:{port}",
@@ -18,5 +17,4 @@ class MinioConnection(Minio):
                     secure = False
         )
 
-        self.products_bucket = products_bucket
-        self.composites_bucket = composites_bucket
+        self.bucket_name = bucket_name
