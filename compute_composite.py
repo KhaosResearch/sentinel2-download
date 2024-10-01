@@ -487,6 +487,9 @@ def create_composite_by_tile_and_date(
     if not products_metadata:
         print(f"No products found for tile {tile} between {start_date} and {end_date}")
         return
+    elif len(products_metadata) == 1:
+        print(f"Only one product found for tile {tile} between {start_date} and {end_date}. Composite will not be created.")
+        return
     
     composite_metadata = _get_composite(
                 products_metadata

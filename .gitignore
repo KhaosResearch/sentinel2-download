@@ -10,3 +10,8 @@ __pycache__
 
 # Google Cloud User Credentials
 gcloud-user.json
+
+# Execution time logs
+execution_time*
+
+tmp/
