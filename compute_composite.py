@@ -226,34 +226,32 @@ def _composite(
     return (composite_out, composite_kwargs)
 
 
-def _get_id_composite(products_ids: List[str]) -> str:
+def _get_hash_composite(products_titles: List[str]) -> str:
     """
-    Calculate the id of a composite using its products' ids and the execution mode.
+    Calculate the hash of a composite using its products' titles and the execution mode.
     """
-    products_ids.sort()
-    concat_ids = "".join(products_ids)
-    id_code = concat_ids
-    hashed_ids = sha256(id_code.encode("utf-8")).hexdigest()
-    return hashed_ids
+    products_titles.sort()
+    concat_titles = "".join(products_titles)
+    hashed_titles = sha256(concat_titles.encode("utf-8")).hexdigest()
+    return hashed_titles
 
 
-def _get_title_composite(
-    products_dates: List[str], products_tiles: List[str], composite_id: str
-) -> str:
+def _get_title_composite(product_titles: List[str]) -> str:
     """
     Get the title of a composite.
     If the execution mode is training, the title will contain the "S2E" prefix, else it will be "S2S".
     """
-    if not all(product_tile == products_tiles[0] for product_tile in products_tiles):
-        raise ValueError(
-            f"Error creating composite, products have different tile: {products_tiles}"
-        )
-    tile = products_tiles[0]
+    tiles = [product_title.split("_")[5] for product_title in product_titles]
+    if not all(tile == tiles[0] for tile in tiles):
+        raise ValueError("All products must have the same tile")
+    tile = tiles[0]
+    composite_hash = _get_hash_composite(product_titles)
+    products_dates = [product_title.split("_")[2] for product_title in product_titles]
     first_product_date, last_product_date = min(products_dates), max(products_dates)
     first_product_date = first_product_date.split("T")[0]
     last_product_date = last_product_date.split("T")[0]
     prefix = "S2S"
-    composite_title = f"{prefix}_MSIL2A_{first_product_date}_NXXX_RXXX_{tile}_{last_product_date}_{composite_id[:8]}"
+    composite_title = f"{prefix}_MSIL2A_{first_product_date}_NXXX_RXXX_{tile}_{last_product_date}_{composite_hash[:8]}"
     return composite_title
 
 
@@ -265,9 +263,9 @@ def _get_composite(
     Search a composite metadata in mongo.
     """
     mongo_collection = MongoConnection().get_composite_collection_object()
-    products_ids = [products_metadata["title"] for products_metadata in products_metadata]
-    hashed_id_composite = _get_id_composite(products_ids)
-    composite_metadata = mongo_collection.find_one({"id": hashed_id_composite})
+    products_titles = [products_metadata["title"] for products_metadata in products_metadata]
+    title_composite = _get_title_composite(products_titles)
+    composite_metadata = mongo_collection.find_one({"title": title_composite})
     return composite_metadata
 
 
@@ -295,7 +293,6 @@ def _create_composite(
 
     products_titles = []
     products_dates = []
-    products_tiles = []
     bands_paths_products = []
     cloud_masks_temp_paths = []
     cloud_masks = {"10": [], "20": [], "60": []}
@@ -303,14 +300,12 @@ def _create_composite(
 
     print("Downloading and reading the cloud masks needed to make the composite")
     for product_metadata in products_metadata:
-
         product_title = product_metadata["title"]
         products_titles.append(product_title)
         products_dates.append(product_title.split("_")[2])
-        products_tiles.append(product_title.split("_")[5])
 
         (rasters_paths, is_band) = _get_product_rasters_paths(
-            product_metadata["title"], minio_client, False
+            product_title, minio_client, False
         )
         bands_paths_product = list(compress(rasters_paths, is_band))
         bands_paths_products.append(bands_paths_product)
@@ -349,8 +344,7 @@ def _create_composite(
                     cloud_masks_temp_paths.append(scl_band_10m_temp_path)
                     cloud_masks["10"].append(cloud_mask_10m)
 
-    composite_id = _get_id_composite(products_titles)
-    composite_title = _get_title_composite(products_dates, products_tiles, composite_id)
+    composite_title = _get_title_composite(products_titles)
     temp_path_composite = Path(tmp_dir, composite_title)
 
     uploaded_composite_band_paths = []
@@ -431,12 +425,8 @@ def _create_composite(
             )
 
         composite_metadata = dict()
-        composite_metadata["id"] = composite_id
         composite_metadata["title"] = composite_title
-        composite_metadata["products"] = [
-            dict(id=product_id, title=products_title)
-            for (product_id, products_title) in zip(products_titles, products_titles)
-        ]
+        composite_metadata["products"] = [{"title": products_title} for products_title in products_titles]
         composite_metadata["first_date"] = _sentinel_date_to_datetime(
             min(products_dates)
         )
@@ -458,7 +448,7 @@ def _create_composite(
         products_titles = [
             products_metadata["title"] for products_metadata in products_metadata
         ]
-        mongo_composites_collection.delete_one({"id": _get_id_composite(products_titles)})
+        mongo_composites_collection.delete_one({"title": _get_title_composite(products_titles)})
         raise e
 
     finally:
@@ -485,11 +475,7 @@ def create_composite_by_tile_and_date(
     max_products = int(os.environ.get("MAX_PRODUCTS_COMPOSITE"))
     products_metadata = list(products_metadata_cursor)[:max_products]
     if not products_metadata:
-        print(f"No products found for tile {tile} between {start_date} and {end_date}")
-        return
-    elif len(products_metadata) == 1:
-        print(f"Only one product found for tile {tile} between {start_date} and {end_date}. Composite will not be created.")
-        return
+        raise ValueError(f"No products found for tile {tile} between {start_date} and {end_date}")
     
     composite_metadata = _get_composite(
                 products_metadata
