@@ -8,13 +8,13 @@ from pathlib import Path
 from operator import mul
 from dotenv import load_dotenv
 from google.cloud import storage
-from raw_index_calculation import calculate_raw_index
+from ds_download.raw_index_calculation import calculate_raw_index
 from os.path import join
 
-from mongo_connection import MongoConnection
-from minio_connection import MinioConnection    
+from ds_download.mongo_connection import MongoConnection
+from ds_download.minio_connection import MinioConnection    
 
-load_dotenv()
+load_dotenv(".env")
 
 def calculate_no_data(folder: str) -> float:
     

@@ -1,7 +1,7 @@
 import time
 from datetime import datetime, timedelta
-from download_using_sentinel_api import download_product_using_sentinel_api
-from compute_composite import create_composite_by_tile_and_date
+from ds_download.download_using_sentinel_api import download_product_using_sentinel_api
+from ds_download.compute_composite import create_composite_by_tile_and_date
 
 # Define the path for a single log file
 log_file_path = "execution_time_log.txt"
@@ -35,10 +35,10 @@ def main_workflow(tiles, year, from_month, to_month):
                     continue
 
 if __name__ == "__main__":
-    tiles = ["30STG", "30SUG", "30SUF", "30STF"]
+    tiles = ["31STF"]
     
     # Clear the log file at the beginning of the execution
     open(log_file_path, 'w').close()  # This clears the content of the log file
-    years = [2018]
+    years = range(2018,2024)
     for year in years:
         main_workflow(tiles, year, 1, 12)

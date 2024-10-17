@@ -7,7 +7,7 @@ import requests
 from dateutil import parser as dparser
 
 import geojson
-from download_from_google_cloud import download_one_google_cloud
+from ds_download.download_from_google_cloud import download_one_google_cloud
 from datetime import datetime
 
 def to_wkt(geojson_file: str, decimals: int = 4) -> str:

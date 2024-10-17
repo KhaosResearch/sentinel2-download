@@ -7,7 +7,7 @@ from datetime import datetime
 
 import numpy as np
 from dotenv import load_dotenv
-from band_arithmetic import (
+from ds_download.band_arithmetic import (
     bri,
     bsi,
     cloud_mask,
@@ -25,10 +25,10 @@ from band_arithmetic import (
     ri,
     true_color
 )
-from minio_connection import MinioConnection
-from mongo_connection import MongoConnection
+from ds_download.minio_connection import MinioConnection
+from ds_download.mongo_connection import MongoConnection
 
-load_dotenv()
+load_dotenv(".env")
 
 indexes_bands = dict(
     moisture={"b8a": "B8A_20m", "b11": "B11_20m"},

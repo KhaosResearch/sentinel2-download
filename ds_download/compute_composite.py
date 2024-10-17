@@ -12,11 +12,11 @@ import rasterio
 
 from os.path import join
 
-from minio_connection import MinioConnection
-from mongo_connection import MongoConnection
+from ds_download.minio_connection import MinioConnection
+from ds_download.mongo_connection import MongoConnection
 
-from raw_index_calculation import calculate_raw_index
-from band_arithmetic import _rescale_band
+from ds_download.raw_index_calculation import calculate_raw_index
+from ds_download.band_arithmetic import _rescale_band
 
 def get_products_by_tile_and_date(tile, start_date, end_date, min_useful_data_percentage):
 

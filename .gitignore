@@ -4,6 +4,7 @@ __pycache__
 
 # Log files
 *.log
+logs/
 
 # Enviroment
 *.env
@@ -15,3 +16,7 @@ gcloud-user.json
 execution_time*
 
 tmp/
+
+ds_download.egg-info/
+dist/
+build/
