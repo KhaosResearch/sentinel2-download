@@ -1,12 +1,12 @@
 # Compiled Python bytecode
 *.py[cod]
-__pycache__
+__pycache__/
 
 # Log files
 *.log
 logs/
 
-# Enviroment
+# Environment variables
 *.env
 
 # Google Cloud User Credentials
@@ -15,8 +15,24 @@ gcloud-user.json
 # Execution time logs
 execution_time*
 
+# Temporary files and directories
 tmp/
+temp/
+*.tmp
 
+# MinIO, Mongo, and data processing-related directories
 ds_download.egg-info/
 dist/
 build/
+
+# Ignore any file backups or copies
+*.copy
+*.bak
+*.orig
+
+# Exclude virtual environment folders
+venv/
+.env/
+
+# Jupyter Notebook checkpoints (if applicable)
+.ipynb_checkpoints/

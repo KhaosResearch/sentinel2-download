@@ -1,0 +1,96 @@
+scheduler:
+  resources: 
+    limits:
+      cpu: 2
+      memory: 8G
+    requests:
+      cpu: 2
+      memory: 8G
+  env:
+    - name: EXTRA_PIP_PACKAGES
+      value: --index-url=http://<pip-username>:<pip-password>@<pip-host>:<pip-port>/simple --trusted-host <pip-host> ds-download --upgrade
+    - name: GOOGLE_APPLICATION_CREDENTIALS
+      value: "/etc/gcloud/gcloud-user.json"
+  mounts:
+    volumes:
+      - name: gcloud-credentials-volume
+        secret:
+          secretName: gcloud-credentials
+    volumeMounts:
+      - name: gcloud-credentials-volume
+        mountPath: "/etc/gcloud"
+        readOnly: true
+
+  serviceType: "NodePort"
+  nodePorts:
+    - port: 8786
+      targetPort: 8786
+      nodePort: 30000
+    - port: 8787
+      targetPort: 8787
+      nodePort: 30001
+
+worker:
+  replicas: 15
+  resources: 
+    limits:
+      cpu: 2
+      memory: 122G
+    requests:
+      cpu: 2
+      memory: 122G
+  extraArgs: 
+    - --resources
+    - "Memory=128"
+  env:
+    - name: EXTRA_PIP_PACKAGES
+      value: --index-url=http://<pip-username>:<pip-password>@<pip-host>:<pip-port>/simple --trusted-host <pip-host> ds-download --upgrade
+    - name: GOOGLE_CLOUD_BUCKET_NAME
+      value: "gcp-public-data-sentinel-2"
+    - name: MINIO_HOST
+      value: "<minio-host>"
+    - name: MINIO_PORT
+      value: "<minio-port>"
+    - name: MINIO_ACCESS_KEY
+      value: "<minio-access-key>"
+    - name: MINIO_SECRET_KEY
+      value: "<minio-secret-key>"
+    - name: MINIO_BUCKET_NAME
+      value: "<minio-bucket-name>"
+    - name: MONGO_HOST
+      value: "<mongo-host>"
+    - name: MONGO_PORT
+      value: "<mongo-port>"
+    - name: MONGO_USERNAME
+      value: "<mongo-username>"
+    - name: MONGO_PASSWORD
+      value: "<mongo-password>"
+    - name: MONGO_DATABASE_NAME
+      value: "<mongo-database-name>"
+    - name: MONGO_COLLECTION_NAME
+      value: "<mongo-collection-name>"
+    - name: MONGO_COMPOSITE_COLLECTION_NAME
+      value: "<mongo-composite-collection-name>"
+    - name: TMP_DIR
+      value: "tmp"
+    - name: MAX_PRODUCTS_COMPOSITE
+      value: "5"
+    - name: GOOGLE_APPLICATION_CREDENTIALS
+      value: "/etc/gcloud/gcloud-user.json"
+  mounts:
+    volumes:
+      - name: gcloud-credentials-volume
+        secret:
+          secretName: gcloud-credentials
+    volumeMounts:
+      - name: gcloud-credentials-volume
+        mountPath: "/etc/gcloud"
+        readOnly: true
+
+jupyter:
+  enabled: false
+
+volumes:
+  - name: gcloud-credentials-volume
+    secret:
+      secretName: gcloud-credentials

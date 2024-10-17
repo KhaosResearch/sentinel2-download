@@ -1,20 +1,36 @@
-from dask.distributed import Client
 from datetime import datetime, timedelta
+from dask.distributed import Client
+from dotenv import load_dotenv
 from ds_download.download_using_sentinel_api import download_product_using_sentinel_api
 from ds_download.compute_composite import create_composite_by_tile_and_date
-import os
-from dotenv import load_dotenv
 
+# Load environment variables
 load_dotenv(".env")
 
-client = Client("192.168.219.16:31000")
+# Set up the Dask distributed client with the scheduler address
+client = Client("<dask-scheduler-host>:<dask-scheduler-port>")
 
-def process_month(year, month, tile):
+def process_month(year: int, month: int, tile: str) -> str:
+    """
+    Process a month's worth of Sentinel-2 data for a specific tile by downloading products 
+    and creating a composite.
+
+    Args:
+        year (int): The year to process.
+        month (int): The month to process.
+        tile (str): The Sentinel-2 tile ID to process.
+
+    Returns:
+        str: A message indicating the success or failure of the process.
+    """
     try:
         init_date = datetime(year, month, 1)
         end_date = (init_date + timedelta(days=31)).replace(day=1)
         
+        # Download Sentinel-2 products
         download_product_using_sentinel_api(False, True, init_date, end_date, tile_id=tile)
+        
+        # Create a composite from the downloaded data
         create_composite_by_tile_and_date(True, False, tile, init_date, end_date, 30)
         
         return f"Processed {tile}, {year}-{month}"
@@ -22,6 +38,7 @@ def process_month(year, month, tile):
     except Exception as e:
         return f"Error for {tile}, {year}-{month}: {str(e)}"
 
+# Define the tiles to process
 tiles = [
     '29SLC', '29SLD', '29SMC', '29SMD', '29SNA', '29SNB', '29SNC',
     '29SND', '29SPA', '29SPB', '29SPC', '29SPD', '29SQA', '29SQB',
@@ -43,16 +60,21 @@ tiles = [
     '30TYS', '31TCM', '31TDM', '31TEM', '31TFM', '31TGM'
 ]
 
+# Years and months to process
 years = [2021]
-months = [4,7,11,10,3,6]
+months = [4, 7, 11, 10, 3, 6]
 
+# Submit Dask tasks for processing the tiles and months
 for month in months:
     futures = [
         client.submit(process_month, year, month, tile)
         for year in years
         for tile in tiles
     ]
+    
+    # Gather the results from all futures
     results = client.gather(futures)
     
+    # Print the results of the processing
     for result in results:
         print(result)
