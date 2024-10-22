@@ -324,7 +324,7 @@ def _create_composite(
                 )
                 scl_band = _read_raster(temp_path_product_band)
                 # Binarize scl band to get a cloud mask
-                cloud_mask = np.isin(scl_band, scl_cloud_values).astype(np.bool)
+                cloud_mask = np.isin(scl_band, scl_cloud_values).astype(bool)
                 cloud_masks[spatial_resolution].append(cloud_mask)
                 kwargs = _get_kwargs_raster(temp_path_product_band)
                 with rasterio.open(temp_path_product_band, "w", **kwargs) as f:
