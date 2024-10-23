@@ -433,6 +433,8 @@ def _create_composite(
         composite_metadata["last_date"] = _sentinel_date_to_datetime(
             max(products_dates)
         )
+        composite_metadata["minioBucket"] = bucket_name
+        composite_metadata["minioBandsPath"] = minio_band_path = join(tile_id, year, month.strftime("%B"), "composites", composite_title, "raw", "")
 
         # Upload metadata to mongo
         result = mongo_composites_collection.insert_one(composite_metadata)
