@@ -1,5 +1,6 @@
 import os
 import traceback
+from collections import defaultdict
 from datetime import datetime
 from hashlib import sha256
 from itertools import compress
@@ -352,36 +353,44 @@ def _create_composite(
     temp_product_dirs = []
     result = None
     try:
-        num_bands = len(bands_paths_products[0])
-        for i_band in range(num_bands):
-            products_i_band_path = [
-                bands_paths_product[i_band]
-                for bands_paths_product in bands_paths_products
-            ]
-            band_name = _get_raster_name_from_path(products_i_band_path[0])
-            band_filename = _get_raster_filename_from_path(products_i_band_path[0])
+        composite_bands_dict = defaultdict(list)
+        for bands_paths_product in bands_paths_products:
+            for band_path in bands_paths_product:
+                band_name = _get_raster_name_from_path(band_path)
+                band_filename = _get_raster_filename_from_path(band_path)
+                if "SCL" in band_name:
+                    continue
+                composite_bands_dict[band_filename].append(band_path)
+                
+        for band_filename, band_paths in composite_bands_dict.items():
+
+            if len(band_paths) != len(products_titles):
+                print(
+                    f"Band {band_filename} is missing in some products, it will not be included in the composite"
+                )
+                continue
+
+            band_name = _get_raster_name_from_path(band_paths[0])
             if "SCL" in band_name:
                 continue
             temp_path_composite_band = Path(temp_path_composite, band_filename)
 
             temp_path_list = []
 
-            for product_i_band_path in products_i_band_path:
-                product_title = product_i_band_path.split("/")[4]
+            for band_path in band_paths:
+                product_title = band_path.split("/")[4]
 
                 temp_dir_product = f"{tmp_dir}/{product_title}"
                 temp_path_product_band = f"{temp_dir_product}/{band_filename}"
-                print(
-                    f"Downloading raster {band_name} from minio into {temp_path_product_band}"
-                )
-                minio_client.fget_object(bucket_name, product_i_band_path, str(temp_path_product_band))
-                spatial_resolution = str(
-                    int(_get_spatial_resolution_raster(temp_path_product_band))
-                )
+                minio_client.fget_object(bucket_name, band_path, str(temp_path_product_band))
 
                 if temp_dir_product not in temp_product_dirs:
                     temp_product_dirs.append(temp_dir_product)
                 temp_path_list.append(temp_path_product_band)
+
+            spatial_resolution = str(
+                int(_get_spatial_resolution_raster(temp_path_list[0]))
+            )
             composite_i_band, kwargs_composite = _composite(
                 temp_path_list,
                 method="median",
