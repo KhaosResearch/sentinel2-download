@@ -1,0 +1,59 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: <CRONJOB_NAME>
+spec:
+  schedule: "<CRON_SCHEDULE>"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          imagePullSecrets:
+            - name: <IMAGE_PULL_SECRET>
+          containers:
+            - name: <CONTAINER_NAME>
+              image: <REGISTRY>/<IMAGE_NAME>:<TAG>
+              imagePullPolicy: Always
+              env:
+                - name: GOOGLE_CLOUD_BUCKET_NAME
+                  value: "<GOOGLE_CLOUD_BUCKET_NAME>"
+                - name: MINIO_HOST
+                  value: "<MINIO_HOST>"
+                - name: MINIO_PORT
+                  value: "<MINIO_PORT>"
+                - name: MINIO_ACCESS_KEY
+                  value: "<MINIO_ACCESS_KEY>"
+                - name: MINIO_SECRET_KEY
+                  value: "<MINIO_SECRET_KEY>"
+                - name: MINIO_BUCKET_NAME
+                  value: "<MINIO_BUCKET_NAME>"
+                - name: MONGO_HOST
+                  value: "<MONGO_HOST>"
+                - name: MONGO_PORT
+                  value: "<MONGO_PORT>"
+                - name: MONGO_USERNAME
+                  value: "<MONGO_USERNAME>"
+                - name: MONGO_PASSWORD
+                  value: "<MONGO_PASSWORD>"
+                - name: MONGO_DATABASE_NAME
+                  value: "<MONGO_DATABASE_NAME>"
+                - name: MONGO_COLLECTION_NAME
+                  value: "<MONGO_COLLECTION_NAME>"
+                - name: MONGO_COMPOSITE_COLLECTION_NAME
+                  value: "<MONGO_COMPOSITE_COLLECTION_NAME>"
+                - name: TMP_DIR
+                  value: "<TMP_DIR>"
+                - name: MAX_PRODUCTS_COMPOSITE
+                  value: "<MAX_PRODUCTS_COMPOSITE>"
+                - name: GOOGLE_APPLICATION_CREDENTIALS
+                  value: "<GOOGLE_APPLICATION_CREDENTIALS_PATH>"
+              volumeMounts:
+                - name: gcloud-credentials-volume
+                  mountPath: "/etc/gcloud"
+                  readOnly: true
+              command: ["sh", "-c", "python update_andalusia.py"]
+          restartPolicy: OnFailure
+          volumes:
+            - name: gcloud-credentials-volume
+              secret:
+                secretName: <GCLOUD_CREDENTIALS_SECRET>
