@@ -416,9 +416,9 @@ def _create_composite(
 
             # Upload raster to minio
             band_filename = band_filename[:-3] + "tif"
-            splits = product_title.split("_T")
+            splits = composite_title.split("_T")
             tile_id = str(splits[1][0:5])
-            splits = product_title.split("_")
+            splits = composite_title.split("_")
             year = splits[2][0:4]
             month = datetime.strptime(splits[2][4:6], "%m")
             minio_band_path = join(tile_id, year, month.strftime("%B"), "composites", composite_title, "raw", band_filename)
@@ -442,8 +442,8 @@ def _create_composite(
         composite_metadata["last_date"] = _sentinel_date_to_datetime(
             max(products_dates)
         )
-        composite_metadata["minioBucket"] = bucket_name
-        composite_metadata["minioBandsPath"] = minio_band_path = join(tile_id, year, month.strftime("%B"), "composites", composite_title, "raw", "")
+        composite_metadata["S3Bucket"] = bucket_name
+        composite_metadata["S3BandsPrefix"] = minio_band_path = join(tile_id, year, month.strftime("%B"), "composites", composite_title, "raw", "")
 
         # Upload metadata to mongo
         result = mongo_composites_collection.insert_one(composite_metadata)
@@ -493,6 +493,17 @@ def create_composite_by_tile_and_date(
             )
     if composite_metadata is None:
         composite_metadata = _create_composite(products_metadata)
+        
+        # Check if there was another composite for the same month and tile
+        mongo_composite_col = MongoConnection().get_composite_collection_object()
+        cursor = mongo_composite_col.find({"$and":[{"tile":tile}, {"title":{"$regex":f"{start_date.year}{start_date.month:02}"}}]})
+        composites_for_month_and_tile = list(cursor)
+        if composites_for_month_and_tile > 1:
+            print("There is more than one composite for the same month and tile")
+            for composite in composites_for_month_and_tile:
+                if composite["title"] != composite_metadata["title"]:
+                    print(f"Deleting composite {composite['title']}")
+                    mongo_composite_col.delete_one({"_id":composite["_id"]})
     else:
         print("The composite is already in mongo. Nothing to do")
 

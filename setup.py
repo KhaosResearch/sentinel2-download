@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="ds_download",
-    version="0.1.1",
+    version="0.1.4",
     description="A package for downloading and processing Sentinel-2 data",
     long_description=open('README.md').read(),
     long_description_content_type='text/markdown',

@@ -148,6 +148,10 @@ def download_product_using_sentinel_api(
         raise ValueError("You must provide either a GeoJSON file or a tile ID.")
 
     for product_metadata in response:
+        for key in product_metadata:
+            if "." in list(product_metadata.keys()):
+                new_key = key.replace(".", "_")
+                product_metadata[new_key] = product_metadata.pop(key)
         product_metadata = dict_to_camel_case_and_str_to_date(product_metadata)
         product_title = product_metadata["name"].replace(".SAFE", "")
         tiles.add(product_title.split("_T")[1][0:5])

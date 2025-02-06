@@ -53,18 +53,10 @@ def download_one_google_cloud(
     Returns:
         None
     """
-    # Connect with MongoDB
-    mongo_col = MongoConnection().get_collection_object()
-
-    # Connect with MinIO
-    minio_client = MinioConnection()
-
-    # Connect with Google Cloud
-    storage_client = storage.Client()
-    bucket_name = os.environ.get("GOOGLE_CLOUD_BUCKET_NAME")
 
     tmp_dir = os.environ.get("TMP_DIR")
 
+    # Extract google cloud blob name
     splits = product_title.split("_T")
     tile_id = str(splits[1][0:5])
     tile_number = str(splits[1][0:2])
@@ -72,6 +64,40 @@ def download_one_google_cloud(
     tile_subtype = str(splits[1][3:5])
     list_of_names = ["L2/tiles", tile_number, tile_type, tile_subtype, product_title + ".SAFE"]
     source_blob_name = join(*list_of_names)
+
+    # Find in google cloud
+    storage_client = storage.Client()
+    bucket_name = os.environ.get("GOOGLE_CLOUD_BUCKET_NAME")
+
+    bucket = storage_client.bucket(bucket_name)
+    blobs = list(bucket.list_blobs(prefix=source_blob_name))
+
+    if len(blobs) == 0:
+        print(f"Product {product_title} not found in Google Cloud.")
+        print(f"Path in cloud storage should be {source_blob_name}, but it was not found.")
+        print("Trying to find alternative name for the same product (different product discriminator)")
+
+        product_title_without_discriminator = "_".join(product_title.split("_")[:3])
+        list_of_names[-1] = product_title_without_discriminator
+        source_blob_alternative_name = join(*list_of_names)
+        blobs = list(bucket.list_blobs(prefix=source_blob_alternative_name))
+
+        if len(blobs) == 0:
+            print("Alternative name not found in Google Cloud. Skipping product.")
+            return
+        else:
+            print("Alternative name found in Google Cloud")
+            product_title = blobs[0].name.split("/")[-2].replace(".SAFE", "")
+            list_of_names = ["L2/tiles", tile_number, tile_type, tile_subtype, product_title + ".SAFE"]
+            source_blob_name = join(*list_of_names)
+            print("Alternative product title is: ", product_title)
+
+
+    # Connect with MongoDB
+    mongo_col = MongoConnection().get_collection_object()
+
+    # Connect with MinIO
+    minio_client = MinioConnection()
 
     # Check if the product is already in Mongo and MinIO
     product_mongo_data = mongo_col.find_one({"title": product_title})
@@ -100,11 +126,6 @@ def download_one_google_cloud(
         blobs = list(bucket.list_blobs(prefix=source_blob_name))
 
         product_folder = Path(source_blob_name).name
-
-        if len(blobs) == 0:
-            print("Product not found in Google Cloud")
-            print(f"Failing blob name: {source_blob_name} title: {product_title}")
-            return
         
         for blob in blobs:
             if blob.name.endswith("/") or "IMG_DATA" not in blob.name:  # Ignore folders and GCloud files
@@ -129,7 +150,9 @@ def download_one_google_cloud(
         # Upload bands to MinIO
         images = Path(unzip_folder).rglob("*.jp2")
         for image in images:
-            image_name = os.path.basename(image).split("_", 2)[2]
+            image_name = os.path.basename(image).split("_")[-2:]
+            image_name = "_".join(image_name)
+
             print(f"Uploading {image_name} to MinIO")
             minio_client.fput_object(
                 minio_client.bucket_name,
@@ -147,10 +170,20 @@ def download_one_google_cloud(
             return
 
         # Insert metadata into MongoDB
-        metadata = sentinel_metadata if sentinel_metadata else {}
+        metadata = {}
+        if sentinel_metadata:
+            metadata["s2APIMetadata"] = sentinel_metadata
+
+        metadata["dataSource"] = {
+                                "googleCloudStorage": {
+                                    "bucketName": "gcp-public-data-sentinel-2",
+                                    "prefix": source_blob_name
+                                    }
+                                }
+        
         metadata["title"] = product_title
-        metadata["minioBucket"] = minio_client.bucket_name
-        metadata["minioBandsPath"] = join(minio_dir, product_title, "raw", "")
+        metadata["S3Bucket"] = minio_client.bucket_name
+        metadata["S3BandsPrefix"] = join(minio_dir, product_title, "raw", "")
         metadata["noDataPercentage"] = calculate_no_data(unzip_folder)
         metadata["datetakeSensingTime"] = datetime.strptime(product_title.split("_")[2], "%Y%m%dT%H%M%S")
         mongo_col.insert_one(metadata)
