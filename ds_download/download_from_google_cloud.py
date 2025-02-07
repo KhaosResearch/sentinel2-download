@@ -186,6 +186,7 @@ def download_one_google_cloud(
         metadata["S3BandsPrefix"] = join(minio_dir, product_title, "raw", "")
         metadata["noDataPercentage"] = calculate_no_data(unzip_folder)
         metadata["datetakeSensingTime"] = datetime.strptime(product_title.split("_")[2], "%Y%m%dT%H%M%S")
+        metadata["tile"]
         mongo_col.insert_one(metadata)
 
         # Clean up
