@@ -270,6 +270,9 @@ def calculate_raw_index(
             print("The index " + index_name + " is already calculated")
             continue
 
+
+        print("Calculating index " + index_name)
+
         for v in indexes_bands[index_name].values():
 
             band_file = v + band_extension

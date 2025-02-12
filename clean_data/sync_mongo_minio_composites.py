@@ -25,12 +25,41 @@ minio_client = MinioConnection()
 
 cursor = mongo_col.find({})
 composite_dict = defaultdict(list)
+
+# get {indexes:{$exists:false}} and calculate indexes
+
+cursor = mongo_col.find({"indexes": {"$exists": False}})
 for document in cursor:
+    print(f"Calculating indexes for {document['title']}")
+    calculate_raw_index(
+        product_title=document["title"],
+        index=[
+            "Moisture",
+            "NDVI",
+            "NDWI",
+            "NDSI",
+            "EVI",
+            "OSAVI",
+            "EVI2",
+            "NDRE",
+            "NDYI",
+            "MNDWI",
+            "BRI",
+            "TCI",
+            "RI",
+            "BSI",
+            "CRI1"
+        ],
+        is_composite=True
+    )
+
+
+for document in cursor:
+    break
     tile = document["title"].split("_T")[1][0:5]
     document["tile"] = tile
     mongo_col.update_one({"_id": document["_id"]}, {"$set": document})
 
-raise Exception("Stop here")
 
 # Delete "id" in "products" array
 cursor = mongo_col.find({})
@@ -94,19 +123,17 @@ for document in cursor:
     month = date.month
     tile = document["title"].split("_T")[1][0:5]
     key = f"{year}-{month}-{tile}"
+    print(tile, key)
     composite_dict[key].append(document["title"])
-    # add tile to document
-    document["tile"] = tile
-    mongo_col.update_one({"_id": document["_id"]}, {"$set": document})
 
 for key in composite_dict:
     if len(composite_dict[key]) > 1:
-        # keep the one with greater "_id" (added last)
-        to_keep = max(composite_dict[key])
-        to_delete = [c for c in composite_dict[key] if c != to_keep]
-        for c in to_delete:
-            #mongo_col.delete_one({"title": c})
-            print(f"Document {c} deleted.")
+        print(f"Multiple composites found for {key}")
+        # keep the one with greater "_id" (added last) (both have same name)
+        ids = mongo_col.find({"title": {"$in": composite_dict[key]}})
+        max_id = max([doc["_id"] for doc in ids])
+        mongo_col.delete_many({"title": {"$in": composite_dict[key]}, "_id": {"$ne": max_id}})
+        print(f"Deleted composites for {key}")
         
 
 

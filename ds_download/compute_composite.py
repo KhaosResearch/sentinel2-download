@@ -499,7 +499,7 @@ def create_composite_by_tile_and_date(
         mongo_composite_col = MongoConnection().get_composite_collection_object()
         cursor = mongo_composite_col.find({"$and":[{"tile":tile}, {"title":{"$regex":f"{start_date.year}{start_date.month:02}"}}]})
         composites_for_month_and_tile = list(cursor)
-        if composites_for_month_and_tile > 1:
+        if len(composites_for_month_and_tile) > 1:
             print("There is more than one composite for the same month and tile")
             for composite in composites_for_month_and_tile:
                 if composite["title"] != composite_metadata["title"]:
@@ -511,6 +511,7 @@ def create_composite_by_tile_and_date(
     composite_title = composite_metadata["title"]
 
     if calculate_intermediate_products:
+        print("Calculating intermediate products for the composite")
         calculate_raw_index(
             product_title=composite_title,
             index=[
@@ -521,6 +522,7 @@ def create_composite_by_tile_and_date(
         )
 
     if calculate_raw_indexes:
+        print("Calculating raw indexes for the composite")
         calculate_raw_index(
             product_title=composite_title,
             index=[
