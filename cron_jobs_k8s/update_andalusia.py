@@ -10,7 +10,7 @@ if __name__ == "__main__":
             "30SVF", "30SWF"
             ]
 
-    now = datetime.now()
+    now = datetime.now() - timedelta(days=2)
     look_from = now - timedelta(days=3)
 
     for tile in tiles:
@@ -32,8 +32,9 @@ if __name__ == "__main__":
             create_composite_by_tile_and_date(
                 calculate_raw_indexes=True,
                 calculate_intermediate_products=False,
-                tile_id=tile,
-                from_date=init_date,
-                to_date=end_date,
+                tile=tile,
+                start_date=init_date,
+                end_date=end_date,
+                min_useful_data_percentage=30
             )
 
