@@ -10,7 +10,7 @@ if __name__ == "__main__":
             "30SVF", "30SWF"
             ]
 
-    now = datetime.now() - timedelta(days=2)
+    now = datetime.now()
     look_from = now - timedelta(days=3)
 
     for tile in tiles:
