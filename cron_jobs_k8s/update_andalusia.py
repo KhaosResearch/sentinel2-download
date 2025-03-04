@@ -28,6 +28,7 @@ if __name__ == "__main__":
 
     if now.day == 1:
         init_date = (now - timedelta(days=1)).replace(day=1)
+        init_date = datetime(init_date.year, init_date.month, 1) # To fix the hour to 00:00:00
         end_date = datetime(now.year, now.month, 1)
 
         for tile in tiles:
