@@ -100,7 +100,7 @@ def download_one_google_cloud(
             product_title = blobs[0].name.split("/")[-2].replace(".SAFE", "")
             list_of_names = ["L2/tiles", tile_number, tile_type, tile_subtype, product_title + ".SAFE"]
             source_blob_name = join(*list_of_names)
-            logger.debug("Alternative product title is: ", product_title)
+            logger.debug(f"Alternative product title is: {product_title}")
 
 
     # Connect with MongoDB
