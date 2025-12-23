@@ -204,7 +204,7 @@ def _composite(
             composite_kwargs["dtype"] = "float32"
             composite_kwargs["nodata"] = np.nan
             composite_kwargs["driver"] = "GTiff"
-        logger.debug(band_path)
+        logger.debug(f"BAND PATH: {band_path}")
         band = _read_raster(band_path)
 
         # Remove nodata pixels
@@ -453,7 +453,7 @@ def _create_composite(
 
         # Upload metadata to mongo
         result = mongo_composites_collection.insert_one(composite_metadata)
-        logger.info("Inserted data in mongo, id: ", result.inserted_id)
+        logger.info(f"Inserted data in mongo, id: {result.inserted_id}")
 
     except (Exception, KeyboardInterrupt) as e:
         logger.warning("Removing uncompleted composite from minio")
@@ -473,6 +473,66 @@ def _create_composite(
             Path.unlink(Path(composite_band))
 
     return composite_metadata
+
+def remove_product_from_minio(product_title: str) -> None:
+    """
+    Removes all objects associated with a product from MinIO.
+    """
+    minio_client = MinioConnection()
+    bucket_name = minio_client.bucket_name
+    
+    # 1. Reconstruct the MinIO path logic (Same as _get_product_rasters_paths)
+    try:
+        splits = product_title.split("_T")
+        tile_id = str(splits[1][0:5])
+        splits = product_title.split("_")
+        year = splits[2][0:4]
+        # Parse month from "20240101T..." format
+        month = datetime.strptime(splits[2][4:6], "%m") 
+        
+        # 'products' is the hardcoded folder for raw data in your script
+        minio_prefix = join(tile_id, year, month.strftime("%B"), "products", product_title, "")
+    except Exception as e:
+        logger.error(f"Failed to parse path for product {product_title}: {e}")
+        return
+
+    # 2. List all objects in that folder (Recursive)
+    # list_objects usually returns an generator/iterator of objects
+    objects_to_delete = minio_client.list_objects(
+        bucket_name, prefix=minio_prefix, recursive=True
+    )
+
+    # 3. Delete them
+    count = 0
+    for obj in objects_to_delete:
+        try:
+            minio_client.remove_object(bucket_name, obj.object_name)
+            count += 1
+        except Exception as e:
+            logger.error(f"Error removing {obj.object_name}: {e}")
+
+    if count > 0:
+        logger.info(f"Removed product {product_title} from MinIO ({count} files).")
+    else:
+        logger.debug(f"No files found to remove for {product_title} (or path was empty).")
+
+def remove_product_from_mongo(product_id) -> None:
+    """
+    Removes the metadata record of a product from the MongoDB products collection.
+    """
+    try:
+        # Connect to the 'products' collection (not composites)
+        mongo_collection = MongoConnection().get_collection_object()
+        
+        result = mongo_collection.delete_one({"_id": product_id})
+        
+        if result.deleted_count > 0:
+            logger.debug(f"Deleted product metadata {product_id} from Mongo.")
+        else:
+            logger.warning(f"Product {product_id} not found in Mongo during cleanup.")
+            
+    except Exception as e:
+        logger.error(f"Failed to delete product {product_id} from Mongo: {e}")
 
 def create_composite_by_tile_and_date(
     calculate_raw_indexes: bool,
@@ -550,3 +610,22 @@ def create_composite_by_tile_and_date(
             ],
             is_composite=True
         )
+
+    if delete_products:
+        logger.info("Cleaning up raw products and metadata used for this composite...")
+        
+        # 'products_metadata' contains the full documents returned by the aggregation pipeline
+        for product in products_metadata:
+            title = product.get("title")
+            p_id = product.get("_id")
+
+            # 1. Delete Files (MinIO)
+            remove_product_from_minio(title) 
+
+            # 2. Delete Metadata (Mongo)
+            if p_id:
+                remove_product_from_mongo(p_id)
+            else:
+                logger.warning(f"Could not delete metadata for {title}: No _id found.")
+            logger.info(f"Cleaned up product {title} from MinIO and Mongo.")
+
