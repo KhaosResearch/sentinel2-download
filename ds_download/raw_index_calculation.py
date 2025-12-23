@@ -29,6 +29,9 @@ from ds_download.band_arithmetic import (
 from ds_download.minio_connection import MinioConnection
 from ds_download.mongo_connection import MongoConnection
 
+import structlog
+logger = structlog.get_logger()
+
 load_dotenv(".env")
 
 INT16_NODATA = -32768
@@ -47,7 +50,7 @@ indexes_bands = dict(
     mndwi={"b3": "B03_20m", "b11": "B11_20m"},
     bri={"b3": "B03_10m", "b5": "B05_20m", "b8": "B08_10m"},
     bsi={"b2": "B02_10m", "b4": "B04_10m", "b8": "B08_10m", "b11": "B11_20m"},
-    tci={"b2": "B02_10m", "b3": "B03_10m", "b4": "B04_10m"},
+    # tci={"b2": "B02_10m", "b3": "B03_10m", "b4": "B04_10m"},
     ri={"b3": "B03_10m", "b4": "B04_10m"},
     cri1={"b2": "B02_10m", "b3": "B03_10m"},
 )
@@ -325,11 +328,11 @@ def calculate_raw_index(
         index_name = idx.lower()
 
         if index_name in product_data[minio_folder_name]:
-            print("The index " + index_name + " is already calculated")
+            logger.warning("The index " + index_name + " is already calculated")
             continue
 
 
-        print("Calculating index " + index_name)
+        logger.info("Calculating index " + index_name)
 
         for v in indexes_bands[index_name].values():
 
@@ -366,4 +369,4 @@ def calculate_raw_index(
     try:
         shutil.rmtree(product_local_folder)
     except OSError as e:
-        print("Error: %s - %s." % (e.filename, e.strerror))
+        logger.exception("Error: %s - %s." % (e.filename, e.strerror))

@@ -11,6 +11,8 @@ from os.path import join
 from ds_download.mongo_connection import MongoConnection
 from ds_download.minio_connection import MinioConnection
 from ds_download.raw_index_calculation import calculate_raw_index
+import structlog
+logger = structlog.get_logger()
 
 # Load environment variables
 load_dotenv(".env")
@@ -81,9 +83,9 @@ def download_one_google_cloud(
     blobs = list(bucket.list_blobs(prefix=source_blob_name))
 
     if len(blobs) == 0:
-        print(f"Product {product_title} not found in Google Cloud.")
-        print(f"Path in cloud storage should be {source_blob_name}, but it was not found.")
-        print("Trying to find alternative name for the same product (different product discriminator)")
+        logger.warning(f"Product {product_title} not found in Google Cloud.")
+        logger.warning(f"Path in cloud storage should be {source_blob_name}, but it was not found.")
+        logger.warning("Trying to find alternative name for the same product (different product discriminator)")
 
         product_title_without_discriminator = "_".join(product_title.split("_")[:3])
         list_of_names[-1] = product_title_without_discriminator
@@ -91,14 +93,14 @@ def download_one_google_cloud(
         blobs = list(bucket.list_blobs(prefix=source_blob_alternative_name))
 
         if len(blobs) == 0:
-            print("Alternative name not found in Google Cloud. Skipping product.")
+            logger.debug("Alternative name not found in Google Cloud. Skipping product.")
             return
         else:
-            print("Alternative name found in Google Cloud")
+            logger.debug("Alternative name found in Google Cloud")
             product_title = blobs[0].name.split("/")[-2].replace(".SAFE", "")
             list_of_names = ["L2/tiles", tile_number, tile_type, tile_subtype, product_title + ".SAFE"]
             source_blob_name = join(*list_of_names)
-            print("Alternative product title is: ", product_title)
+            logger.debug("Alternative product title is: ", product_title)
 
 
     # Connect with MongoDB
@@ -122,11 +124,11 @@ def download_one_google_cloud(
             minio_found = True
             break
     except Exception:
-        print(f"Product not found in MinIO")
+        logger.exception(f"Product not found in MinIO")
         minio_found = False
 
     if product_mongo_data and minio_found:
-        print("The product is already in MongoDB and MinIO. Nothing to do.")
+        logger.debug("The product is already in MongoDB and MinIO. Nothing to do.")
     else:
         unzip_folder = join(tmp_dir, product_title, "")
 
@@ -142,7 +144,7 @@ def download_one_google_cloud(
                 continue
             if not _matches_required_band(blob.name, required_bands):
                 continue
-            print(blob.name)
+            logger.debug(f'BLOB NAME: {blob.name}')
 
             # Prepare path to local file
             output_folder = Path(tmp_dir, product_folder)
@@ -157,9 +159,7 @@ def download_one_google_cloud(
             if not Path.is_file(local_blob_path):
                 blob.download_to_filename(str(local_blob_path))
             else:
-                print("File exists, skipping.")
-            if Path.is_file(local_blob_path):
-                local_images.append(local_blob_path)
+                logger.debug("File exists, skipping.")
 
         # Upload bands to MinIO
         downloaded_band_names = {"_".join(os.path.basename(image).split("_")[-2:]).replace(".jp2", "") for image in local_images}
@@ -172,7 +172,7 @@ def download_one_google_cloud(
             image_name = os.path.basename(image).split("_")[-2:]
             image_name = "_".join(image_name)
 
-            print(f"Uploading {image_name} to MinIO")
+            logger.info(f"Uploading {image_name} to MinIO")
             minio_client.fput_object(
                 minio_client.bucket_name,
                 minio_dir + product_title + "/raw/" + image_name,
@@ -185,7 +185,7 @@ def download_one_google_cloud(
             for _ in objects:
                 break
         except Exception:
-            print(f"Product not uploaded to MinIO")
+            logger.exception(f"Product not uploaded to MinIO")
             return
 
         # Insert metadata into MongoDB
@@ -213,7 +213,7 @@ def download_one_google_cloud(
             if Path.is_dir(Path(unzip_folder)):
                 shutil.rmtree(unzip_folder)
         except OSError as e:
-            print(f"Error: {e.filename} - {e.strerror}.")
+            logger.exception(f"Error: {e.filename} - {e.strerror}.")
 
     if calculate_intermediate_products:
         calculate_raw_index(
@@ -227,7 +227,8 @@ def download_one_google_cloud(
             product_title=product_title,
             index=[
                 "Moisture", "NDVI", "NDWI", "NDSI", "EVI", "OSAVI",
-                "EVI2", "NDRE", "NDYI", "MNDWI", "BRI", "TCI", 
+                "EVI2", "NDRE", "NDYI", "MNDWI", "BRI",
+                # "TCI", 
                 "RI", "BSI", "CRI1"
             ],
         )

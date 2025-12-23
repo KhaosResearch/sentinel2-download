@@ -19,6 +19,9 @@ from ds_download.mongo_connection import MongoConnection
 from ds_download.raw_index_calculation import calculate_raw_index, compress_and_quantize_tiff
 from ds_download.band_arithmetic import _rescale_band
 
+import structlog
+logger = structlog.get_logger()
+
 def get_products_by_tile_and_date(tile, start_date, end_date, min_useful_data_percentage):
 
     mongo_collection = MongoConnection().get_collection_object()
@@ -201,7 +204,7 @@ def _composite(
             composite_kwargs["dtype"] = "float32"
             composite_kwargs["nodata"] = np.nan
             composite_kwargs["driver"] = "GTiff"
-        print(band_path)
+        logger.debug(band_path)
         band = _read_raster(band_path)
 
         # Remove nodata pixels
@@ -286,8 +289,8 @@ def _create_composite(
     mongo_composites_collection = MongoConnection().get_composite_collection_object()
 
     products_titles = [product["title"] for product in products_metadata]
-    print(
-        "Creating composite of ", len(products_titles), " products: ", products_titles
+    logger.info(
+        f"Creating composite of {len(products_titles)} products: {products_titles}"
     )
 
     tmp_dir = os.environ.get("TMP_DIR")
@@ -299,7 +302,7 @@ def _create_composite(
     cloud_masks = {"10": [], "20": [], "60": []}
     scl_cloud_values = [3, 8, 9, 10]
 
-    print("Downloading and reading the cloud masks needed to make the composite")
+    logger.info("Downloading and reading the cloud masks needed to make the composite")
     for product_metadata in products_metadata:
         product_title = product_metadata["title"]
         products_titles.append(product_title)
@@ -365,7 +368,7 @@ def _create_composite(
         for band_filename, band_paths in composite_bands_dict.items():
 
             if len(band_paths) != len(products_titles):
-                print(
+                logger.warning(
                     f"Band {band_filename} is missing in some products, it will not be included in the composite"
                 )
                 continue
@@ -431,7 +434,7 @@ def _create_composite(
                 content_type="image/tif",
             )
             uploaded_composite_band_paths.append(minio_band_path)
-            print(
+            logger.info(
                 f"Uploaded raster: -> {temp_path_composite_band} into {bucket_name}:{minio_band_path}"
             )
 
@@ -450,10 +453,10 @@ def _create_composite(
 
         # Upload metadata to mongo
         result = mongo_composites_collection.insert_one(composite_metadata)
-        print("Inserted data in mongo, id: ", result.inserted_id)
+        logger.info("Inserted data in mongo, id: ", result.inserted_id)
 
     except (Exception, KeyboardInterrupt) as e:
-        print("Removing uncompleted composite from minio")
+        logger.warning("Removing uncompleted composite from minio")
         traceback.print_exc()
         for composite_band in uploaded_composite_band_paths:
             minio_client.remove_object(
@@ -477,7 +480,8 @@ def create_composite_by_tile_and_date(
     tile: str, 
     start_date: datetime, 
     end_date: datetime, 
-    min_useful_data_percentage: float
+    min_useful_data_percentage: float,
+    delete_products: bool = True
 ) -> None:
     """
     Create a composite by tile and date range.
@@ -502,18 +506,18 @@ def create_composite_by_tile_and_date(
         cursor = mongo_composite_col.find({"$and":[{"tile":tile}, {"title":{"$regex":f"{start_date.year}{start_date.month:02}"}}]})
         composites_for_month_and_tile = list(cursor)
         if len(composites_for_month_and_tile) > 1:
-            print("There is more than one composite for the same month and tile")
+            logger.warning("There is more than one composite for the same month and tile")
             for composite in composites_for_month_and_tile:
                 if composite["title"] != composite_metadata["title"]:
-                    print(f"Deleting composite {composite['title']}")
+                    logger.debug(f"Deleting composite {composite['title']}")
                     mongo_composite_col.delete_one({"_id":composite["_id"]})
     else:
-        print("The composite is already in mongo. Nothing to do")
+        logger.debug("The composite is already in mongo. Nothing to do")
 
     composite_title = composite_metadata["title"]
 
     if calculate_intermediate_products:
-        print("Calculating intermediate products for the composite")
+        logger.info("Calculating intermediate products for the composite")
         calculate_raw_index(
             product_title=composite_title,
             index=[
@@ -524,7 +528,7 @@ def create_composite_by_tile_and_date(
         )
 
     if calculate_raw_indexes:
-        print("Calculating raw indexes for the composite")
+        logger.info("Calculating raw indexes for the composite")
         calculate_raw_index(
             product_title=composite_title,
             index=[
@@ -539,7 +543,7 @@ def create_composite_by_tile_and_date(
                 "NDYI",
                 "MNDWI",
                 "BRI",
-                "TCI",
+                # "TCI",
                 "RI",
                 "BSI",
                 "CRI1"

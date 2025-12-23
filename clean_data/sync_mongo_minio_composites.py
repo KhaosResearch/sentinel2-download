@@ -45,7 +45,7 @@ for document in cursor:
             "NDYI",
             "MNDWI",
             "BRI",
-            "TCI",
+            # "TCI",
             "RI",
             "BSI",
             "CRI1"
