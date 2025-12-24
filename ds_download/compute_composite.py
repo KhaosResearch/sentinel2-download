@@ -12,6 +12,7 @@ import rasterio
 
 
 from os.path import join
+from minio.deleteobjects import DeleteObject
 
 from ds_download.minio_connection import MinioConnection
 from ds_download.mongo_connection import MongoConnection
@@ -481,40 +482,46 @@ def remove_product_from_minio(product_title: str) -> None:
     minio_client = MinioConnection()
     bucket_name = minio_client.bucket_name
     
-    # 1. Reconstruct the MinIO path logic (Same as _get_product_rasters_paths)
     try:
+        # Expected format: S2A_MSIL2A_20240101T...
         splits = product_title.split("_T")
-        tile_id = str(splits[1][0:5])
-        splits = product_title.split("_")
-        year = splits[2][0:4]
-        # Parse month from "20240101T..." format
-        month = datetime.strptime(splits[2][4:6], "%m") 
+        tile_id = str(splits[1][0:5])      # e.g. 29SPC
         
-        # 'products' is the hardcoded folder for raw data in your script
-        minio_prefix = join(tile_id, year, month.strftime("%B"), "products", product_title, "")
+        splits = product_title.split("_")
+        year = splits[2][0:4]              # e.g. 2024
+        # Parse month from "20240101T..."
+        month_name = datetime.strptime(splits[2][4:6], "%m").strftime("%B") 
+        
+        # HARDCODED PATH STRUCTURE based on your previous messages:
+        # tile/year/Month/products/product_title/
+        minio_prefix = f"{tile_id}/{year}/{month_name}/products/{product_title}/"
+        
     except Exception as e:
         logger.error(f"Failed to parse path for product {product_title}: {e}")
         return
 
-    # 2. List all objects in that folder (Recursive)
-    # list_objects usually returns an generator/iterator of objects
     objects_to_delete = minio_client.list_objects(
         bucket_name, prefix=minio_prefix, recursive=True
     )
 
-    # 3. Delete them
+    # Delete the objects
+    # Optimisation: We collect them into a list to check if we actually found anything
+    obj_list = list(objects_to_delete)
+    
+    if not obj_list:
+        logger.warning(f"MinIO Path {minio_prefix} was empty. Nothing to delete.")
+        return
+
+    # Delete loop
     count = 0
-    for obj in objects_to_delete:
+    for obj in obj_list:
         try:
             minio_client.remove_object(bucket_name, obj.object_name)
             count += 1
         except Exception as e:
             logger.error(f"Error removing {obj.object_name}: {e}")
 
-    if count > 0:
-        logger.info(f"Removed product {product_title} from MinIO ({count} files).")
-    else:
-        logger.debug(f"No files found to remove for {product_title} (or path was empty).")
+    logger.info(f"Removed product {product_title} from MinIO ({count} files).")
 
 def remove_product_from_mongo(product_id) -> None:
     """
@@ -533,6 +540,28 @@ def remove_product_from_mongo(product_id) -> None:
             
     except Exception as e:
         logger.error(f"Failed to delete product {product_id} from Mongo: {e}")
+
+def get_all_products_for_cleanup(tile, start_date, end_date):
+    """
+    Fetches ALL products for a tile/date range, regardless of quality/clouds.
+    Used specifically for cleanup.
+    """
+    mongo_collection = MongoConnection().get_collection_object()
+
+    # Simple pipeline: Just match Tile and Date. No cloud filtering.
+    pipeline = [
+        {
+            "$match": {
+                "title": {"$regex": tile},
+                "datetakeSensingTime": {"$gte": start_date, "$lt": end_date}
+            }
+        },
+        {
+            "$project": {"title": 1, "_id": 1} # We only need Title (for MinIO) and ID (for Mongo)
+        }
+    ]
+    
+    return mongo_collection.aggregate(pipeline)
 
 def create_composite_by_tile_and_date(
     calculate_raw_indexes: bool,
@@ -615,7 +644,8 @@ def create_composite_by_tile_and_date(
         logger.info("Cleaning up raw products and metadata used for this composite...")
         
         # 'products_metadata' contains the full documents returned by the aggregation pipeline
-        for product in products_metadata:
+        all_products = list(get_all_products_for_cleanup(tile, start_date, end_date))
+        for product in all_products:
             title = product.get("title")
             p_id = product.get("_id")
 
