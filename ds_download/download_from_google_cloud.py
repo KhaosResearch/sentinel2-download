@@ -119,13 +119,13 @@ def download_one_google_cloud(
 
     minio_found = False
     try:
+        minio_found = False
         objects = minio_client.list_objects(minio_client.bucket_name, prefix=join(minio_dir, product_title), recursive=False)
         for _ in objects:
             minio_found = True
             break
     except Exception:
         logger.exception(f"Product not found in MinIO")
-        minio_found = False
 
     if product_mongo_data and minio_found:
         logger.debug("The product is already in MongoDB and MinIO. Nothing to do.")
