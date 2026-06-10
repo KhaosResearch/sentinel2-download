@@ -1,6 +1,5 @@
 import os
 import re
-import shutil
 from datetime import datetime
 
 import geojson
@@ -112,7 +111,8 @@ def download_product_using_sentinel_api(
     from_date: datetime, 
     to_date: datetime, 
     geojson_path: str = None, 
-    tile_id: str = None
+    tile_id: str = None,
+    required_bands: list[str] = None,
 ) -> None:
     """
     Download Sentinel-2 products using the Copernicus Open Access Hub API.
@@ -124,6 +124,7 @@ def download_product_using_sentinel_api(
         to_date (datetime): End date for the search.
         geojson_path (str, optional): Path to the GeoJSON file for spatial search.
         tile_id (str, optional): Sentinel-2 tile ID for the search.
+        required_bands (list[str], optional): Sentinel band filenames to download, for example ["B03_10m", "B08_10m"].
 
     Returns:
         None
@@ -138,7 +139,7 @@ def download_product_using_sentinel_api(
     tiles = set()
     tmp_dir = os.environ.get("TMP_DIR")
     if not os.path.exists(tmp_dir):
-        os.mkdir(tmp_dir)
+        os.makedirs(tmp_dir, exist_ok=True)
 
     if tile_id:
         response = find_products_sentinel_api_by_tile_id(tile_id, from_date, to_date)
@@ -155,6 +156,10 @@ def download_product_using_sentinel_api(
         product_metadata = dict_to_camel_case_and_str_to_date(product_metadata)
         product_title = product_metadata["name"].replace(".SAFE", "")
         tiles.add(product_title.split("_T")[1][0:5])
-        download_one_google_cloud(calculate_raw_indexes, calculate_intermediate_products, product_title, product_metadata)
-
-    shutil.rmtree(tmp_dir)
+        download_one_google_cloud(
+            calculate_raw_indexes,
+            calculate_intermediate_products,
+            product_title,
+            product_metadata,
+            required_bands=required_bands,
+        )

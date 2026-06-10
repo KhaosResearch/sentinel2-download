@@ -35,11 +35,18 @@ def calculate_no_data(folder: str) -> float:
     return percentage
 
 
+def _matches_required_band(blob_name: str, required_bands: list[str] = None) -> bool:
+    if required_bands is None:
+        return True
+    return any(f"_{band}." in blob_name for band in required_bands)
+
+
 def download_one_google_cloud(
     calculate_raw_indexes: bool,
     calculate_intermediate_products: bool,
     product_title: str,
-    sentinel_metadata: dict = {}
+    sentinel_metadata: dict = {},
+    required_bands: list[str] = None,
 ) -> None:
     """
     Download a Sentinel-2 product from Google Cloud, process it, and upload to MinIO and Mongo.
@@ -49,6 +56,7 @@ def download_one_google_cloud(
         calculate_intermediate_products (bool): Whether to calculate intermediate products for the product.
         product_title (str): The title of the Sentinel-2 product to download.
         sentinel_metadata (dict, optional): Optional metadata from the Sentinel API.
+        required_bands (list[str], optional): Sentinel band filenames to download, for example ["B03_10m", "B08_10m"].
 
     Returns:
         None
@@ -107,6 +115,7 @@ def download_one_google_cloud(
     month = datetime.strptime(splits_check[2][4:6], "%m")
     minio_dir = join(tile_id, year, month.strftime("%B"), "products", "")
 
+    minio_found = False
     try:
         objects = minio_client.list_objects(minio_client.bucket_name, prefix=join(minio_dir, product_title), recursive=False)
         for _ in objects:
@@ -126,14 +135,17 @@ def download_one_google_cloud(
         blobs = list(bucket.list_blobs(prefix=source_blob_name))
 
         product_folder = Path(source_blob_name).name
+        local_images = []
         
         for blob in blobs:
             if blob.name.endswith("/") or "IMG_DATA" not in blob.name:  # Ignore folders and GCloud files
                 continue
+            if not _matches_required_band(blob.name, required_bands):
+                continue
             print(blob.name)
 
             # Prepare path to local file
-            output_folder = join(tmp_dir, product_folder)
+            output_folder = Path(tmp_dir, product_folder)
             local_blob_name = Path(blob.name[len(source_blob_name + "/"):] if blob.name.startswith(source_blob_name + "/") else blob.name)
             local_blob_path = output_folder / local_blob_name
             local_blob_path = Path(str(local_blob_path).replace(".SAFE", ""))
@@ -143,13 +155,20 @@ def download_one_google_cloud(
 
             # Download if file doesn't exist
             if not Path.is_file(local_blob_path):
-                blob.download_to_filename(local_blob_path)
+                blob.download_to_filename(str(local_blob_path))
             else:
                 print("File exists, skipping.")
+            if Path.is_file(local_blob_path):
+                local_images.append(local_blob_path)
 
         # Upload bands to MinIO
-        images = Path(unzip_folder).rglob("*.jp2")
-        for image in images:
+        downloaded_band_names = {"_".join(os.path.basename(image).split("_")[-2:]).replace(".jp2", "") for image in local_images}
+        if required_bands and not set(required_bands).issubset(downloaded_band_names):
+            missing_bands = sorted(set(required_bands) - downloaded_band_names)
+            print(f"Missing required bands for {product_title}: {missing_bands}. Skipping product.")
+            return
+
+        for image in local_images:
             image_name = os.path.basename(image).split("_")[-2:]
             image_name = "_".join(image_name)
 
