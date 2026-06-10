@@ -6,12 +6,12 @@
 
 ## Tech Stack
 - Python 3.10+
-- Package metadata in `setup.py`; pinned runtime dependencies in `requirements.txt`.
+- Package metadata and dependencies in `pyproject.toml`; lockfile in `uv.lock`.
 - Main geospatial/data dependencies include `rasterio`, `numpy`, `google-cloud-storage`, `minio`, `pymongo`, `requests`, `geojson`, and `geomet`.
 
 ## Commands
-- Install local package: `pip install .`
-- Install dependencies: `pip install -r requirements.txt`
+- Install/sync environment: `uv sync`
+- Run scripts: `uv run python <script>.py`
 - Build package: `make build` or `python -m build`
 - Release package: `make release` uploads `dist/ds_download*` to the configured `khaos` repository.
 - There is no committed pytest configuration or test suite yet. Do not claim tests exist unless adding them.
