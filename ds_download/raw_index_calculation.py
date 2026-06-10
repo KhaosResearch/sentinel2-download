@@ -6,6 +6,7 @@ from pathlib import Path
 from datetime import datetime
 
 import numpy as np
+import rasterio
 from dotenv import load_dotenv
 from ds_download.band_arithmetic import (
     bri,
@@ -30,6 +31,8 @@ from ds_download.mongo_connection import MongoConnection
 
 load_dotenv(".env")
 
+INT16_NODATA = -32768
+
 indexes_bands = dict(
     moisture={"b8a": "B8A_20m", "b11": "B11_20m"},
     ndvi={"b4": "B04_10m", "b8": "B08_10m"},
@@ -48,6 +51,59 @@ indexes_bands = dict(
     ri={"b3": "B03_10m", "b4": "B04_10m"},
     cri1={"b2": "B02_10m", "b3": "B03_10m"},
 )
+
+
+def compress_and_quantize_tiff(tif_path: str | Path) -> Path:
+    """
+    Rewrite a TIFF as compressed Int16 before uploading it to MinIO.
+
+    Float rasters with values in [-1, 1] are scaled by 10000. Other numeric
+    rasters are rounded directly into Int16. NaN values are stored as nodata.
+    """
+    tif_path = Path(tif_path)
+    with rasterio.open(tif_path) as src:
+        data = src.read()
+        kwargs = src.meta.copy()
+        source_nodata = src.nodata
+
+    finite_mask = np.isfinite(data)
+    if source_nodata is not None and np.isfinite(source_nodata):
+        finite_mask &= data != source_nodata
+
+    scale = 1
+    if finite_mask.any():
+        finite_values = data[finite_mask]
+        has_fractional_values = np.any(~np.isclose(finite_values, np.rint(finite_values)))
+        should_scale_normalized_float = (
+            np.issubdtype(data.dtype, np.floating)
+            and finite_values.min() >= -1
+            and finite_values.max() <= 1
+            and has_fractional_values
+        )
+        if should_scale_normalized_float:
+            scale = 10000
+
+    scaled = np.rint(data * scale)
+
+    quantized = np.full(data.shape, INT16_NODATA, dtype=np.int16)
+    quantized[finite_mask] = np.clip(
+        scaled[finite_mask],
+        INT16_NODATA + 1,
+        np.iinfo(np.int16).max,
+    ).astype(np.int16)
+
+    kwargs.update(
+        driver="GTiff",
+        dtype=rasterio.int16,
+        nodata=INT16_NODATA,
+        compress="DEFLATE",
+        predictor=2,
+        zlevel=9,
+    )
+    with rasterio.open(tif_path, "w", **kwargs) as dst:
+        dst.write(quantized)
+
+    return tif_path
 
 
 def find_product_image(band_name: str, product_title: str) -> Path:
@@ -192,10 +248,12 @@ def get_index(index_name, bands_dict, product_title, minio_folder_name, is_compo
     tif_minio_path = join(minio_dir, product_title, minio_folder_name ,index_name + ".tif")
 
 
+    upload_path = compress_and_quantize_tiff(indexes_folder + "/" + index_name + ".tif")
+
     minio_client.fput_object(
         minio_bucket_name,
         tif_minio_path,
-        indexes_folder + "/" + index_name + ".tif",
+        upload_path,
         content_type="image/tif",
     )
 

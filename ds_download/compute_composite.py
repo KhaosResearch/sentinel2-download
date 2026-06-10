@@ -16,7 +16,7 @@ from os.path import join
 from ds_download.minio_connection import MinioConnection
 from ds_download.mongo_connection import MongoConnection
 
-from ds_download.raw_index_calculation import calculate_raw_index
+from ds_download.raw_index_calculation import calculate_raw_index, compress_and_quantize_tiff
 from ds_download.band_arithmetic import _rescale_band
 
 def get_products_by_tile_and_date(tile, start_date, end_date, min_useful_data_percentage):
@@ -414,6 +414,8 @@ def _create_composite(
             ) as file_composite:
                 file_composite.write(composite_i_band)
 
+            compress_and_quantize_tiff(temp_path_composite_band)
+
             # Upload raster to minio
             band_filename = band_filename[:-3] + "tif"
             splits = composite_title.split("_T")
@@ -544,4 +546,3 @@ def create_composite_by_tile_and_date(
             ],
             is_composite=True
         )
-
