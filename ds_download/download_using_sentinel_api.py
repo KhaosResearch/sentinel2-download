@@ -6,8 +6,36 @@ import geojson
 import geomet.wkt
 import requests
 from dateutil import parser as dparser
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from ds_download.download_from_google_cloud import download_one_google_cloud
+
+CATALOGUE_TIMEOUT = (10, 120)
+CATALOGUE_RETRIES = 3
+
+
+def catalogue_session() -> requests.Session:
+    session = requests.Session()
+    retry = Retry(
+        total=CATALOGUE_RETRIES,
+        connect=CATALOGUE_RETRIES,
+        read=CATALOGUE_RETRIES,
+        status=CATALOGUE_RETRIES,
+        backoff_factor=2,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=("GET",),
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
+def get_catalogue_products(url: str) -> list:
+    response = catalogue_session().get(url, timeout=CATALOGUE_TIMEOUT)
+    response.raise_for_status()
+    return response.json()["value"]
 
 
 def to_wkt(geojson_file: str, decimals: int = 4) -> str:
@@ -78,9 +106,9 @@ def find_products_sentinel_api_by_tile_id(tile_id: str, from_date: str, to_date:
     Returns:
         list: A list of Sentinel-2 products matching the search criteria.
     """
-    response = requests.get(
+    response = get_catalogue_products(
         f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name eq 'SENTINEL-2' and contains(Name,'MSIL2A') and contains(Name,'{tile_id}') and ContentDate/Start gt {from_date}T00:00:00.000Z and ContentDate/Start lt {to_date}T00:00:00.000Z&$top=1000"
-    ).json()["value"]
+    )
     
     return response
 
@@ -98,9 +126,9 @@ def find_products_sentinel_api_by_geojson_file(geojson_path: str, from_date: str
         list: A list of Sentinel-2 products matching the search criteria.
     """
     footprint = to_wkt(geojson_path)
-    response = requests.get(
+    response = get_catalogue_products(
         f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name eq 'SENTINEL-2' and contains(Name,'MSIL2A') and OData.CSC.Intersects(area=geography'SRID=4326;{footprint}') and ContentDate/Start gt {from_date}T00:00:00.000Z and ContentDate/Start lt {to_date}T00:00:00.000Z&$top=1000"
-    ).json()["value"]
+    )
     
     return response
 
