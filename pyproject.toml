@@ -18,6 +18,8 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
+    "bokeh>=3.9.1",
+    "dask[distributed]",
     "geojson==2.5.0",
     "geomet==1.1.0",
     "geopandas",
