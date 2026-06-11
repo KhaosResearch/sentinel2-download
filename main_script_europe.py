@@ -13,6 +13,7 @@ from rasterio.windows import Window
 import requests
 from dotenv import load_dotenv
 from shapely.geometry import box
+from shapely.validation import make_valid
 
 from ds_download.download_using_sentinel_api import download_product_using_sentinel_api, find_products_sentinel_api_by_tile_id
 from ds_download.minio_connection import MinioConnection
@@ -63,13 +64,16 @@ def get_europe_land_tiles(refresh: bool = False) -> list[str]:
     countries = gpd.read_file(countries_path).to_crs(grid.crs)
 
     # Geographic Europe approximation, clipped to avoid transcontinental country geometries
-    # selecting tiles far outside Europe.
-    europe_bbox = box(-25, 34, 60, 72)
-    europe_geometries = countries[countries["CONTINENT"] == "Europe"].intersection(europe_bbox)
+    # selecting tiles far outside Europe. Russia is excluded for this processing run,
+    # while coastal tiles are still included by the intersects predicate below.
+    europe_bbox = box(-26, 33, 61, 73)
+    europe_country_mask = (countries["CONTINENT"] == "Europe") & (countries["ISO_A3"] != "RUS")
+    europe_geometries = countries[europe_country_mask].intersection(europe_bbox)
     if hasattr(europe_geometries, "union_all"):
         europe_land = europe_geometries.union_all()
     else:
         europe_land = europe_geometries.unary_union
+    europe_land = make_valid(europe_land).buffer(0)
 
     tile_column = next(
         col
