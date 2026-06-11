@@ -61,7 +61,7 @@ def get_products_by_tile_and_date(tile, start_date, end_date, min_useful_data_pe
     
     product_metadata_cursor = mongo_collection.aggregate(pipeline)
 
-    return product_metadata_cursor
+    return product_metadata_cursor, mongo_collection
 
 def _get_kwargs_raster(raster_path):
     """
@@ -473,13 +473,12 @@ def _create_composite(
         for composite_band in temp_paths_composite_bands + cloud_masks_temp_paths:
             Path.unlink(Path(composite_band))
 
-    return composite_metadata
+    return composite_metadata, minio_client
 
-def remove_product_from_minio(product_title: str) -> None:
+def remove_product_from_minio(product_title: str, minio_client) -> None:
     """
     Removes all objects associated with a product from MinIO.
     """
-    minio_client = MinioConnection()
     bucket_name = minio_client.bucket_name
     
     try:
@@ -523,14 +522,11 @@ def remove_product_from_minio(product_title: str) -> None:
 
     logger.info(f"Removed product {product_title} from MinIO ({count} files).")
 
-def remove_product_from_mongo(product_id) -> None:
+def remove_product_from_mongo(product_id, mongo_collection) -> None:
     """
     Removes the metadata record of a product from the MongoDB products collection.
     """
     try:
-        # Connect to the 'products' collection (not composites)
-        mongo_collection = MongoConnection().get_collection_object()
-        
         result = mongo_collection.delete_one({"_id": product_id})
         
         if result.deleted_count > 0:
@@ -541,13 +537,11 @@ def remove_product_from_mongo(product_id) -> None:
     except Exception as e:
         logger.error(f"Failed to delete product {product_id} from Mongo: {e}")
 
-def get_all_products_for_cleanup(tile, start_date, end_date):
+def get_all_products_for_cleanup(tile, start_date, end_date, mongo_collection):
     """
     Fetches ALL products for a tile/date range, regardless of quality/clouds.
     Used specifically for cleanup.
     """
-    mongo_collection = MongoConnection().get_collection_object()
-
     # Simple pipeline: Just match Tile and Date. No cloud filtering.
     pipeline = [
         {
@@ -575,7 +569,7 @@ def create_composite_by_tile_and_date(
     """
     Create a composite by tile and date range.
     """
-    products_metadata_cursor = get_products_by_tile_and_date(
+    products_metadata_cursor, mongo_collection = get_products_by_tile_and_date(
         tile, start_date, end_date, min_useful_data_percentage
     )
 
@@ -588,7 +582,7 @@ def create_composite_by_tile_and_date(
                 products_metadata
             )
     if composite_metadata is None:
-        composite_metadata = _create_composite(products_metadata)
+        composite_metadata, minio_client = _create_composite(products_metadata)
         
         # Check if there was another composite for the same month and tile
         mongo_composite_col = MongoConnection().get_composite_collection_object()
@@ -644,17 +638,17 @@ def create_composite_by_tile_and_date(
         logger.info("Cleaning up raw products and metadata used for this composite...")
         
         # 'products_metadata' contains the full documents returned by the aggregation pipeline
-        all_products = list(get_all_products_for_cleanup(tile, start_date, end_date))
+        all_products = list(get_all_products_for_cleanup(tile, start_date, end_date, mongo_collection))
         for product in all_products:
             title = product.get("title")
             p_id = product.get("_id")
 
             # 1. Delete Files (MinIO)
-            remove_product_from_minio(title) 
+            remove_product_from_minio(title, minio_client) 
 
             # 2. Delete Metadata (Mongo)
             if p_id:
-                remove_product_from_mongo(p_id)
+                remove_product_from_mongo(p_id, mongo_collection)
             else:
                 logger.warning(f"Could not delete metadata for {title}: No _id found.")
             logger.info(f"Cleaned up product {title} from MinIO and Mongo.")
