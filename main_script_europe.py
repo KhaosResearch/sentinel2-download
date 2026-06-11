@@ -9,6 +9,7 @@ import shutil
 import geopandas as gpd
 import numpy as np
 import rasterio
+from rasterio.windows import Window
 import requests
 from dotenv import load_dotenv
 from shapely.geometry import box
@@ -135,6 +136,69 @@ def monthly_index_key(tile: str, year: int, month: int, product_titles: list[str
 
     month_name = datetime(year, month, 1).strftime("%B")
     return join(tile, str(year), month_name, "composites", title, "indexes", f"{index_name.lower()}.tif")
+
+
+def monthly_composite_raw_prefix(tile: str, year: int, month: int, title: str) -> str:
+    month_name = datetime(year, month, 1).strftime("%B")
+    return join(tile, str(year), month_name, "composites", title, "raw", "")
+
+
+def product_title_date(product_title: str) -> datetime:
+    return datetime.strptime(product_title.split("_")[2].split("T")[0], "%Y%m%d")
+
+
+def build_monthly_composite_metadata(
+    tile: str,
+    year: int,
+    month: int,
+    product_titles: list[str],
+    bucket_name: str,
+) -> dict | None:
+    title = composite_title(tile, product_titles)
+    if title is None:
+        return None
+
+    products_dates = [product_title_date(product_title) for product_title in product_titles]
+    return {
+        "title": title,
+        "products": [{"title": product_title} for product_title in product_titles],
+        "first_date": min(products_dates),
+        "last_date": max(products_dates),
+        "S3Bucket": bucket_name,
+        "S3BandsPrefix": monthly_composite_raw_prefix(tile, year, month, title),
+        "tile": tile,
+    }
+
+
+def upsert_monthly_composite_metadata(
+    composite_col,
+    tile: str,
+    year: int,
+    month: int,
+    product_titles: list[str],
+    bucket_name: str,
+    index_name: str,
+    index_key: str,
+) -> None:
+    metadata = build_monthly_composite_metadata(tile, year, month, product_titles, bucket_name)
+    if metadata is None:
+        return
+
+    normalized_index_name = index_name.lower()
+    composite_col.update_one(
+        {"title": metadata["title"]},
+        {
+            "$set": {
+                **metadata,
+                f"indexes.{normalized_index_name}": {
+                    "name": normalized_index_name,
+                    "rasterS3Bucket": bucket_name,
+                    "rasterS3Key": index_key,
+                },
+            },
+        },
+        upsert=True,
+    )
 
 
 def object_exists(minio_client: MinioConnection, object_name: str) -> bool:
@@ -285,6 +349,55 @@ def read_index_from_minio(minio_client: MinioConnection, object_name: str, local
     return index_array, metadata
 
 
+def iter_raster_windows(width: int, height: int, block_size: int = 1024):
+    for row_off in range(0, height, block_size):
+        window_height = min(block_size, height - row_off)
+        for col_off in range(0, width, block_size):
+            window_width = min(block_size, width - col_off)
+            yield Window(col_off, row_off, window_width, window_height)
+
+
+def read_scaled_index_window(src, window: Window) -> np.ndarray:
+    index_array = src.read(1, window=window).astype(np.float32)
+    nodata = src.nodata
+    is_scaled_int = np.issubdtype(src.dtypes[0], np.integer)
+
+    if nodata is not None:
+        index_array[index_array == nodata] = np.nan
+    index_array[index_array == INT16_NODATA] = np.nan
+    if is_scaled_int:
+        index_array = index_array / 10000
+    return index_array
+
+
+def write_windowed_mean(source_paths: list[Path], output_path: Path, block_size: int = 1024) -> dict:
+    sources = [rasterio.open(source_path) for source_path in source_paths]
+    try:
+        output_metadata = sources[0].meta.copy()
+        output_metadata.update(driver="GTiff", dtype=rasterio.float32, count=1, nodata=np.nan)
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with rasterio.open(output_path, "w", **output_metadata) as dst:
+            for window in iter_raster_windows(sources[0].width, sources[0].height, block_size=block_size):
+                window_shape = (int(window.height), int(window.width))
+                running_sum = np.zeros(window_shape, dtype=np.float32)
+                valid_count = np.zeros(window_shape, dtype=np.uint16)
+
+                for src in sources:
+                    index_array = read_scaled_index_window(src, window)
+                    valid = np.isfinite(index_array)
+                    running_sum[valid] += index_array[valid]
+                    valid_count[valid] += 1
+
+                mean_array = np.full(window_shape, np.nan, dtype=np.float32)
+                np.divide(running_sum, valid_count, out=mean_array, where=valid_count > 0)
+                dst.write(mean_array, 1, window=window)
+        return output_metadata
+    finally:
+        for src in sources:
+            src.close()
+
+
 def get_monthly_index_products(tile: str, year: int, month: int, index_name: str, mongo_col) -> list[dict]:
     start_date, end_date = month_range(year, month)
     raster_key = f"indexes.{index_name.lower()}.rasterS3Key"
@@ -303,6 +416,7 @@ def create_monthly_index_mean(
     month: int,
     index_name: str,
     mongo_col,
+    composite_col,
     minio_client: MinioConnection,
     tmp_dir: Path,
 ) -> str | None:
@@ -311,19 +425,14 @@ def create_monthly_index_mean(
     if not products:
         return None
 
-    index_arrays = []
-    output_metadata = None
+    local_index_paths = []
     normalized_index_name = index_name.lower()
     for product in products:
         index_key = product["indexes"][normalized_index_name]["rasterS3Key"]
         local_path = tmp_dir / tile / str(year) / f"{month:02}" / f"{product['title']}_{normalized_index_name}.tif"
-        index_array, metadata = read_index_from_minio(minio_client, index_key, local_path)
-        if output_metadata is None:
-            output_metadata = metadata
-        index_arrays.append(index_array)
-
-    monthly_index = np.nanmean(np.stack(index_arrays), axis=0).astype(np.float32)
-    output_metadata.update(driver="GTiff", dtype=rasterio.float32, count=1, nodata=np.nan)
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        minio_client.fget_object(minio_client.bucket_name, index_key, str(local_path))
+        local_index_paths.append(local_path)
 
     product_titles = [product["title"] for product in products]
     object_name = monthly_index_key(tile, year, month, product_titles, index_name)
@@ -332,9 +441,7 @@ def create_monthly_index_mean(
 
     month_name = start_date.strftime("%B")
     local_output = tmp_dir / tile / str(year) / month_name / f"{normalized_index_name}.tif"
-    local_output.parent.mkdir(parents=True, exist_ok=True)
-    with rasterio.open(local_output, "w", **output_metadata) as dst:
-        dst.write(monthly_index, 1)
+    write_windowed_mean(local_index_paths, local_output)
 
     compress_and_quantize_tiff(local_output)
     minio_client.fput_object(
@@ -342,6 +449,16 @@ def create_monthly_index_mean(
         object_name,
         local_output,
         content_type="image/tif",
+    )
+    upsert_monthly_composite_metadata(
+        composite_col,
+        tile,
+        year,
+        month,
+        product_titles,
+        minio_client.bucket_name,
+        index_name,
+        object_name,
     )
     return object_name
 
@@ -367,7 +484,9 @@ def process_tile_month(tile: str, year: int, month: int, indexes: list[str] | No
     task_tmp_dir.mkdir(parents=True, exist_ok=True)
     os.environ["TMP_DIR"] = str(task_tmp_dir)
 
-    mongo_col = MongoConnection().get_collection_object()
+    mongo_connection = MongoConnection()
+    mongo_col = mongo_connection.get_collection_object()
+    composite_col = mongo_connection.get_composite_collection_object()
     minio_client = MinioConnection()
     tmp_dir = task_tmp_dir / "monthly_indexes"
 
@@ -394,7 +513,16 @@ def process_tile_month(tile: str, year: int, month: int, indexes: list[str] | No
 
         outputs = []
         for index_name in missing_indexes:
-            output_key = create_monthly_index_mean(tile, year, month, index_name, mongo_col, minio_client, tmp_dir)
+            output_key = create_monthly_index_mean(
+                tile,
+                year,
+                month,
+                index_name,
+                mongo_col,
+                composite_col,
+                minio_client,
+                tmp_dir,
+            )
             if output_key:
                 outputs.append(output_key)
                 print(f"Uploaded monthly {index_name} mean: {output_key}")
@@ -416,7 +544,9 @@ def main():
     os.environ["TMP_DIR"] = str(run_tmp_dir)
 
     start_date, end_date = year_range(args.year)
-    mongo_col = MongoConnection().get_collection_object()
+    mongo_connection = MongoConnection()
+    mongo_col = mongo_connection.get_collection_object()
+    composite_col = mongo_connection.get_composite_collection_object()
     minio_client = MinioConnection()
     tmp_dir = run_tmp_dir / "monthly_indexes"
 
@@ -454,6 +584,7 @@ def main():
                         month,
                         index_name,
                         mongo_col,
+                        composite_col,
                         minio_client,
                         tmp_dir,
                     )

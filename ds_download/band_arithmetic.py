@@ -2,6 +2,7 @@ from pathlib import Path
 
 import numpy as np
 import rasterio
+from rasterio.windows import Window
 from rasterio.warp import Resampling, reproject
 
 # Allow division by zero.
@@ -52,6 +53,56 @@ def read(filename):
         B[B == 0] = np.nan
         kwargs = f.meta
     return B, kwargs
+
+
+def _iter_raster_windows(width: int, height: int, block_size: int = 1024):
+    for row_off in range(0, height, block_size):
+        window_height = min(block_size, height - row_off)
+        for col_off in range(0, width, block_size):
+            window_width = min(block_size, width - col_off)
+            yield Window(col_off, row_off, window_width, window_height)
+
+
+def _read_band_window(src, window: Window) -> np.ndarray:
+    band = src.read(1, window=window).astype(np.float32)
+    if src.nodata is not None:
+        band[band == src.nodata] = np.nan
+    band[band == 0] = np.nan
+    return band
+
+
+def _write_windowed_normalized_difference(
+    left_path: Path,
+    right_path: Path,
+    output: Path,
+) -> float:
+    running_sum = 0.0
+    running_count = 0
+
+    with rasterio.open(left_path) as left_src, rasterio.open(right_path) as right_src:
+        if left_src.shape != right_src.shape:
+            raise ValueError(f"Raster shapes differ: {left_path}={left_src.shape}, {right_path}={right_src.shape}")
+
+        kwargs = left_src.meta.copy()
+        kwargs.update(driver="GTiff", dtype=rasterio.float32, nodata=np.nan, count=1)
+
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with rasterio.open(output, "w", **kwargs) as dst:
+            for window in _iter_raster_windows(left_src.width, left_src.height):
+                left = _read_band_window(left_src, window)
+                right = _read_band_window(right_src, window)
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    index = (left - right) / (left + right)
+                index[~np.isfinite(index)] = np.nan
+                index = index.astype(np.float32, copy=False)
+                dst.write(index, 1, window=window)
+
+                valid = np.isfinite(index)
+                if valid.any():
+                    running_sum += float(np.nansum(index))
+                    running_count += int(np.count_nonzero(valid))
+
+    return running_sum / running_count if running_count else np.nan
 
 
 def cloud_cover_percentage(b3: Path, b4: Path, b11: Path, tau: float = 0.2, *, output: Path= None) -> float:
@@ -180,7 +231,7 @@ def moisture(b8a: Path, b11: Path, *, output: Path= None) -> np.ndarray:
     return moisture
 
 
-def ndvi(b4: Path, b8: Path, *, output: Path= None) -> np.ndarray:
+def ndvi(b4: Path, b8: Path, *, output: Path= None) -> np.ndarray | float:
     """
     Compute Normalized Difference Vegetation Index (NDVI).
 
@@ -196,6 +247,9 @@ def ndvi(b4: Path, b8: Path, *, output: Path= None) -> np.ndarray:
     :param output: Path to output file.
     :return: NDVI index.
     """
+    if output:
+        return _write_windowed_normalized_difference(b8, b4, output)
+
     red, kwargs = read(b4)
     nir, _ = read(b8)
 
@@ -241,7 +295,7 @@ def ndsi(b3: Path, b11: Path, *, output: Path= None) -> np.ndarray:
     return ndsi
 
 
-def ndwi(b3: Path, b8: Path, *, output: Path= None) -> np.ndarray:
+def ndwi(b3: Path, b8: Path, *, output: Path= None) -> np.ndarray | float:
     """
     Compute Normalized Difference Water Index (NDWI) index.
 
@@ -257,6 +311,9 @@ def ndwi(b3: Path, b8: Path, *, output: Path= None) -> np.ndarray:
     :param output: Path to output file.
     :return: NDWI index.
     """
+    if output:
+        return _write_windowed_normalized_difference(b3, b8, output)
+
     band_3, kwargs = read(b3)
     band_8, _ = read(b8)
 
