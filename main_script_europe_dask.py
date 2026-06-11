@@ -1,5 +1,6 @@
 from argparse import ArgumentParser
 from pathlib import Path
+import traceback
 
 from dask.distributed import Client, as_completed
 from dotenv import load_dotenv
@@ -10,7 +11,11 @@ from main_script_europe import INDEXES, MONTHS, get_europe_land_tiles
 def run_process_tile_month(tile: str, year: int, month: int, indexes: list[str]) -> str:
     from main_script_europe import process_tile_month
 
-    return process_tile_month(tile, year, month, indexes)
+    try:
+        return process_tile_month(tile, year, month, indexes)
+    except Exception as exc:
+        formatted_traceback = traceback.format_exc()
+        raise RuntimeError(f"Failed {tile} {year}-{month:02}: {type(exc).__name__}: {exc}\n{formatted_traceback}") from None
 
 
 def parse_args():
@@ -33,7 +38,7 @@ def main():
     client = Client(args.scheduler)
     client.upload_file(str(Path(__file__).with_name("main_script_europe.py")))
     futures = [
-        client.submit(run_process_tile_month, tile, year, month, args.indexes, pure=False)
+        client.submit(run_process_tile_month, tile, year, month, args.indexes, pure=False, retries=2)
         for year in years
         for tile in tiles
         for month in MONTHS
@@ -41,7 +46,10 @@ def main():
 
     print(f"Submitted {len(futures)} tile/month tasks")
     for future in as_completed(futures):
-        print(future.result())
+        try:
+            print(future.result())
+        except Exception as exc:
+            print(f"Task failed after retries: {exc}")
 
 
 if __name__ == "__main__":
