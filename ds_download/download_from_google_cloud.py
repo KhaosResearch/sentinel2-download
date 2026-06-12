@@ -160,12 +160,15 @@ def download_one_google_cloud(
                 blob.download_to_filename(str(local_blob_path))
             else:
                 logger.debug("File exists, skipping.")
+            if Path.is_file(local_blob_path):
+                local_images.append(local_blob_path)
 
         # Upload bands to MinIO
         downloaded_band_names = {"_".join(os.path.basename(image).split("_")[-2:]).replace(".jp2", "") for image in local_images}
+        logger.debug(f"DOWNLOADED BAND NAMES: {downloaded_band_names}")
         if required_bands and not set(required_bands).issubset(downloaded_band_names):
             missing_bands = sorted(set(required_bands) - downloaded_band_names)
-            print(f"Missing required bands for {product_title}: {missing_bands}. Skipping product.")
+            logger.warning(f"Missing required bands for {product_title}: {missing_bands}. Skipping product.")
             return
 
         for image in local_images:
@@ -226,9 +229,10 @@ def download_one_google_cloud(
         calculate_raw_index(
             product_title=product_title,
             index=[
-                "Moisture", "NDVI", "NDWI", "NDSI", "EVI", "OSAVI",
-                "EVI2", "NDRE", "NDYI", "MNDWI", "BRI",
+                "NDVI", "NDWI", 
+                # "Moisture", "NDSI", "EVI", "OSAVI",
+                # "EVI2", "NDRE", "NDYI", "MNDWI", "BRI",
                 # "TCI", 
-                "RI", "BSI", "CRI1"
+                # "RI", "BSI", "CRI1"
             ],
         )

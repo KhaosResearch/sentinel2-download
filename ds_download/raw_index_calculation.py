@@ -338,7 +338,8 @@ def calculate_raw_index(
 
             band_file = v + band_extension
             local_band_path = join(product_local_folder, band_file)
-
+            logger.debug(f"MINIO OBJECT: {join(bands_dir, band_file)}")
+            logger.debug(f"LOCAL OBJECT: {local_band_path}")
             if not os.path.exists(local_band_path):
                 minio_client.fget_object(
                     minio_bucket_name,

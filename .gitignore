@@ -39,3 +39,7 @@ venv/
 
 # Jupyter Notebook checkpoints (if applicable)
 .ipynb_checkpoints/
+
+# Custom
+*.txt
+*.geojson

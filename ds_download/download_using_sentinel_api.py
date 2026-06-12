@@ -5,6 +5,9 @@ from datetime import datetime
 import geojson
 import geomet.wkt
 import requests
+
+import geopandas as gpd
+
 from dateutil import parser as dparser
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -58,8 +61,22 @@ def to_wkt(geojson_file: str, decimals: int = 4) -> str:
         geojson_ = geojson.load(f)
 
     geometry = geojson_["features"][0]["geometry"]
-    wkt = geomet.wkt.dumps(geometry, decimals=decimals)
+    if len(str(geometry)) <= 20000:
+        wkt = geomet.wkt.dumps(geometry, decimals=decimals) 
+    else:
+        gdf = gpd.read_file(geojson_file)
 
+        minx, miny, maxx, maxy = gdf.total_bounds
+
+        wkt = (
+            f"POLYGON(("
+            f"{minx} {miny},"
+            f"{maxx} {miny},"
+            f"{maxx} {maxy},"
+            f"{minx} {maxy},"
+            f"{minx} {miny}"
+            f"))"
+        )
     # Strip unnecessary spaces
     wkt = re.sub(r"(?<!\d) ", "", wkt)
     return wkt
