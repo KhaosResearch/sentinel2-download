@@ -491,18 +491,19 @@ def cleanup_product_data(tile: str, year: int, mongo_col, minio_client: MinioCon
 def process_tile_month(tile: str, year: int, month: int, indexes: list[str] | None = None) -> str:
     load_dotenv(".env")
     indexes = indexes or INDEXES
-    base_tmp_dir = Path(os.environ.get("TMP_DIR", "tmp"))
+    original_tmp_dir = os.environ.get("TMP_DIR")
+    base_tmp_dir = Path(original_tmp_dir or "tmp")
     task_tmp_dir = base_tmp_dir / f"dask_{year}_{month:02}_{tile}_{os.getpid()}"
     task_tmp_dir.mkdir(parents=True, exist_ok=True)
     os.environ["TMP_DIR"] = str(task_tmp_dir)
 
-    mongo_connection = MongoConnection()
-    mongo_col = mongo_connection.get_collection_object()
-    composite_col = mongo_connection.get_composite_collection_object()
-    minio_client = MinioConnection()
-    tmp_dir = task_tmp_dir / "monthly_indexes"
-
     try:
+        mongo_connection = MongoConnection()
+        mongo_col = mongo_connection.get_collection_object()
+        composite_col = mongo_connection.get_composite_collection_object()
+        minio_client = MinioConnection()
+        tmp_dir = task_tmp_dir / "monthly_indexes"
+
         missing_indexes = missing_indexes_for_month(tile, year, month, mongo_col, minio_client, tmp_dir, indexes)
         if not missing_indexes:
             return f"Skipped {tile} {year}-{month:02}: monthly indexes already exist"
@@ -545,6 +546,10 @@ def process_tile_month(tile: str, year: int, month: int, indexes: list[str] | No
         return f"Processed {tile} {year}-{month:02}: {len(outputs)} monthly indexes uploaded"
     finally:
         shutil.rmtree(task_tmp_dir, ignore_errors=True)
+        if original_tmp_dir is None:
+            os.environ.pop("TMP_DIR", None)
+        else:
+            os.environ["TMP_DIR"] = original_tmp_dir
 
 
 def main():
