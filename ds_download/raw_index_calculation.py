@@ -112,11 +112,25 @@ def compress_and_quantize_tiff(tif_path: str | Path) -> Path:
 def find_product_image(band_name: str, product_title: str) -> Path:
     """
     Finds image matching a pattern in the product folder with glob.
-    :param pattern: A pattern to match.
+    Prefers .tif (GeoJSON masked) over .jp2 (full tile).
+    
+    :param band_name: Band name to match (e.g., "B08_10m").
+    :param product_title: Product title for the folder.
     :return: A Path object pointing to the first found image.
     """
     product_folder = join(os.environ.get("TMP_DIR"), product_title)
-    return ([f for f in Path(product_folder).glob("*" + band_name + "*")])[0]
+    
+    # Try to find .tif first (GeoJSON mode)
+    tif_matches = [f for f in Path(product_folder).glob("*" + band_name + "*.tif")]
+    if tif_matches:
+        return tif_matches[0]
+    
+    # Fall back to .jp2 (tile mode)
+    jp2_matches = [f for f in Path(product_folder).glob("*" + band_name + "*.jp2")]
+    if jp2_matches:
+        return jp2_matches[0]
+    
+    raise FileNotFoundError(f"No band file found for {band_name} in {product_folder}")
 
 def get_index(index_name, bands_dict, product_title, minio_folder_name, is_composite):
 
@@ -336,16 +350,38 @@ def calculate_raw_index(
 
         for v in indexes_bands[index_name].values():
 
-            band_file = v + band_extension
-            local_band_path = join(product_local_folder, band_file)
-            logger.debug(f"MINIO OBJECT: {join(bands_dir, band_file)}")
+            # Try .tif first (GeoJSON masked), then .jp2 (full tile)
+            local_band_path = join(product_local_folder, v + ".tif")
+            minio_band_file_tif = v + ".tif"
+            minio_band_file_jp2 = v + band_extension
+            
+            logger.debug(f"MINIO OBJECT (.tif): {join(bands_dir, minio_band_file_tif)}")
+            logger.debug(f"MINIO OBJECT (.jp2): {join(bands_dir, minio_band_file_jp2)}")
             logger.debug(f"LOCAL OBJECT: {local_band_path}")
+            
             if not os.path.exists(local_band_path):
-                minio_client.fget_object(
-                    minio_bucket_name,
-                    join(bands_dir, band_file),
-                    local_band_path
-                )
+                # Try .tif first
+                try:
+                    minio_client.fget_object(
+                        minio_bucket_name,
+                        join(bands_dir, minio_band_file_tif),
+                        local_band_path
+                    )
+                    logger.debug(f"Downloaded .tif band: {minio_band_file_tif}")
+                except Exception:
+                    # Fall back to .jp2
+                    local_band_path_jp2 = join(product_local_folder, v + band_extension)
+                    try:
+                        minio_client.fget_object(
+                            minio_bucket_name,
+                            join(bands_dir, minio_band_file_jp2),
+                            local_band_path_jp2
+                        )
+                        local_band_path = local_band_path_jp2
+                        logger.debug(f"Downloaded .jp2 band: {minio_band_file_jp2}")
+                    except Exception as e:
+                        logger.error(f"Could not download band {v}: {e}")
+                        raise
 
         dict_key = index_name.replace("-", "")
         index_dicts[index_name] = get_index(

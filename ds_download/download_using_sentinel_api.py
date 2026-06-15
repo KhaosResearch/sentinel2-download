@@ -61,7 +61,7 @@ def to_wkt(geojson_file: str, decimals: int = 4) -> str:
         geojson_ = geojson.load(f)
 
     geometry = geojson_["features"][0]["geometry"]
-    if len(str(geometry)) <= 20000:
+    if len(str(geometry)) <= 500:
         wkt = geomet.wkt.dumps(geometry, decimals=decimals) 
     else:
         gdf = gpd.read_file(geojson_file)
@@ -207,4 +207,6 @@ def download_product_using_sentinel_api(
             product_title,
             product_metadata,
             required_bands=required_bands,
+            is_geojson=geojson_path is not None,
+            geojson_path=geojson_path,
         )

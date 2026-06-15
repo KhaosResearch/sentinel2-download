@@ -194,9 +194,14 @@ def create_monthly_geojson_index_mean(
 
     month_name = datetime(year, month, 1).strftime("%B")
     local_output = tmp_dir / geojson_name / str(year) / month_name / f"{normalized_index_name}.tif"
+    logger.debug(f"LOCAL INDEX PATHS: {local_index_paths}")
+    logger.debug(f"LOCAL OUTPUT: {local_output}")
     write_windowed_mean(local_index_paths, local_output)
 
-    compress_and_quantize_tiff(local_output)
+    # For GeoJSON monthly composites keep float32 output (do not quantize),
+    # so visualization and downstream consumers receive correctly scaled values
+    # in the [-1, 1] range. This avoids confusion from int16 10000x scaling.
+    # compress_and_quantize_tiff(local_output)
     minio_client.fput_object(
         minio_client.bucket_name,
         object_name,
@@ -290,6 +295,7 @@ def parse_args():
 # Required bands are derived from the selected indexes using required_bands_for_indexes(args.indexes).
 
 def main():
+    init_time = datetime.now()
     load_dotenv(".env")
     args = parse_args()
     geojson_name = _normalize_geojson_name(args.geojson_path)
@@ -350,9 +356,20 @@ def main():
                 logger.warning(
                     f"Skipping cleanup for {month_name} {args.year}: not all requested indexes were generated."
                 )
+    except Exception as e:
+        logger.exception("An exception occurred:")
+        logger.error(str(e))
+        # cleanup_geojson_product_data(
+        #             args.geojson_path,
+        #             args.year,
+        #             month,
+        #             mongo_col,
+        #             minio_client,
+        #         )
     finally:
         shutil.rmtree(run_tmp_dir, ignore_errors=True)
-
+        print()
+        logger.info(f"FINAL TIME: {datetime.now() - init_time}")
 
 if __name__ == "__main__":
     main()
