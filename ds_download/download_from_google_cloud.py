@@ -167,6 +167,7 @@ def download_one_google_cloud(
     required_bands: list[str] = None,
     is_geojson: bool = False,
     geojson_path: str = None,
+    quantize: bool = True,
 ) -> None:
     """
     Download a Sentinel-2 product from Google Cloud, process it, and upload to MinIO and Mongo.
@@ -180,8 +181,9 @@ def download_one_google_cloud(
         product_title (str): The title of the Sentinel-2 product to download.
         sentinel_metadata (dict, optional): Optional metadata from the Sentinel API.
         required_bands (list[str], optional): Sentinel band filenames to download, for example ["B03_10m", "B08_10m"].
-        is_geojson (bool): Whether this is a GeoJSON AOI download (vs. full tile).
-        geojson_path (str): Path to GeoJSON file if is_geojson=True.
+        is_geojson (bool, optional): Whether this is a GeoJSON AOI download (vs. full tile).
+        geojson_path (str, optional): Path to GeoJSON file if is_geojson=True.
+        quantize (bool, optional): If 'True', it quantizes the resulting `.tif` indexes from `float32` to `int16` to reduce file size. Defaults to True.
 
     Returns:
         None
@@ -379,4 +381,5 @@ def download_one_google_cloud(
                 # "TCI", 
                 # "RI", "BSI", "CRI1"
             ],
+            quantize=quantize,
         )

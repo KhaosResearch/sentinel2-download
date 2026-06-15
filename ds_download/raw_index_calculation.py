@@ -56,7 +56,9 @@ indexes_bands = dict(
 )
 
 
-def compress_and_quantize_tiff(tif_path: str | Path) -> Path:
+def compress_and_quantize_tiff(
+        tif_path: str | Path,
+    ) -> Path:
     """
     Rewrite a TIFF as compressed Int16 before uploading it to MinIO.
 
@@ -132,7 +134,14 @@ def find_product_image(band_name: str, product_title: str) -> Path:
     
     raise FileNotFoundError(f"No band file found for {band_name} in {product_folder}")
 
-def get_index(index_name, bands_dict, product_title, minio_folder_name, is_composite):
+def get_index(
+        index_name: str,
+        bands_dict: dict,
+        product_title: str,
+        minio_folder_name: str,
+        is_composite: bool,
+        quantize: bool = True
+    ):
 
     band_extension = ".tif" if is_composite else ".jp2"
 
@@ -265,7 +274,8 @@ def get_index(index_name, bands_dict, product_title, minio_folder_name, is_compo
     tif_minio_path = join(minio_dir, product_title, minio_folder_name ,index_name + ".tif")
 
 
-    upload_path = compress_and_quantize_tiff(indexes_folder + "/" + index_name + ".tif")
+    tif_path = indexes_folder + "/" + index_name + ".tif"
+    upload_path = compress_and_quantize_tiff(tif_path) if quantize else Path(tif_path)
 
     minio_client.fput_object(
         minio_bucket_name,
@@ -295,7 +305,8 @@ def calculate_raw_index(
     product_title: str,
     index: list,
     minio_folder_name: str = "indexes",
-    is_composite: bool = False
+    is_composite: bool = False,
+    quantize: bool = True,
 ):
     """
     Example: python raw_index_calculation.py --uid dad7f379-de8c-49ec-b4cf-44348d0f418c --index ndvi --index ndsi --temp-dir ./data
@@ -389,7 +400,8 @@ def calculate_raw_index(
             bands_dict=indexes_bands[dict_key],
             product_title=product_title,
             minio_folder_name=minio_folder_name,
-            is_composite=is_composite
+            is_composite=is_composite,
+            quantize=quantize
         )
 
 

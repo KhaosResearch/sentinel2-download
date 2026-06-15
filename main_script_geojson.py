@@ -27,6 +27,18 @@ def _normalize_geojson_name(geojson_path: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]+", "_", geojson_name)
 
 
+def str_to_bool(value: str) -> bool:
+    """Convert a string command line argument to a boolean."""
+    if isinstance(value, bool):
+        return value
+    value_lower = value.strip().lower()
+    if value_lower in {"true", "t", "yes", "y", "1"}:
+        return True
+    if value_lower in {"false", "f", "no", "n", "0"}:
+        return False
+    raise ValueError(f"Boolean value expected for quantize, got '{value}'")
+
+
 def geojson_composite_title(geojson_name: str, product_titles: list[str]) -> str | None:
     if not product_titles:
         return None
@@ -285,6 +297,13 @@ def parse_args():
         default=["NDVI", "NDWI"],
         help="Index names to calculate for each GeoJSON monthly composite. Defaults to NDVI and NDWI.",
     )
+    parser.add_argument(
+        "--quantize",
+        type=str_to_bool,
+        default=False,
+        help="If True, quantizes the resulting `.tif` indexes from float32 to int16 to reduce file size. Defaults to True.",
+    )
+
     return parser.parse_args()
 
 
@@ -303,6 +322,8 @@ def main():
     run_tmp_dir = base_tmp_dir / f"geojson_{args.year}_{geojson_name}_{os.getpid()}"
     run_tmp_dir.mkdir(parents=True, exist_ok=True)
     os.environ["TMP_DIR"] = str(run_tmp_dir)
+
+    quantize = args.quantize
 
     mongo_connection = MongoConnection()
     mongo_col = mongo_connection.get_collection_object()
@@ -325,6 +346,7 @@ def main():
                 to_date=month_end,
                 geojson_path=args.geojson_path,
                 required_bands=required_bands_for_indexes(args.indexes),
+                quantize=quantize,
             )
 
             monthly_outputs = []

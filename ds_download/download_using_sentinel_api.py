@@ -158,6 +158,7 @@ def download_product_using_sentinel_api(
     geojson_path: str = None, 
     tile_id: str = None,
     required_bands: list[str] = None,
+    quantize: bool = True,
 ) -> None:
     """
     Download Sentinel-2 products using the Copernicus Open Access Hub API.
@@ -170,6 +171,7 @@ def download_product_using_sentinel_api(
         geojson_path (str, optional): Path to the GeoJSON file for spatial search.
         tile_id (str, optional): Sentinel-2 tile ID for the search.
         required_bands (list[str], optional): Sentinel band filenames to download, for example ["B03_10m", "B08_10m"].
+        quantize (bool, optional): If 'True', it quantizes the resulting `.tif` indexes from `float32` to `int16` to reduce file size. Defaults to True.
 
     Returns:
         None
@@ -209,4 +211,5 @@ def download_product_using_sentinel_api(
             required_bands=required_bands,
             is_geojson=geojson_path is not None,
             geojson_path=geojson_path,
+            quantize=quantize,
         )
