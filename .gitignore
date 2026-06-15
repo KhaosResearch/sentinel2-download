@@ -41,6 +41,8 @@ venv/
 .ipynb_checkpoints/
 
 # Custom
+out/
+
 *.txt
 *.geojson
 *.tif
