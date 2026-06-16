@@ -15,12 +15,12 @@ from rasterio.mask import mask
 from google.cloud import storage
 from os.path import join
 import geojson
-import json
 
 from ds_download.mongo_connection import MongoConnection
 from ds_download.minio_connection import MinioConnection
 from ds_download.raw_index_calculation import calculate_raw_index
 import structlog
+
 logger = structlog.get_logger()
 
 # Load environment variables
@@ -154,6 +154,7 @@ def mask_jp2_to_geotiff(
         logger.warning(f"Failed to mask JP2 to GeoTIFF due to pipeline execution error: {e}")
         return False
 
+
 def _matches_required_band(blob_name: str, required_bands: list[str] = None) -> bool:
     if required_bands is None:
         return True
@@ -247,19 +248,20 @@ def is_product_already_stored(
 def download_blob_data(
         blob: Any,
         product_title: str,
-        is_geojson: bool,
-        geojson_path: str,
         tmp_dir: str,
-        source_blob_name: str
+        source_blob_name: str,
+        is_geojson: bool=False,
+        geojson_path: str=None,
         )->tuple[Path, str]:
     """
     Process and download Google Cloud's blob from metadata.
     Args:
         product_title (str): The title of the Sentinel-2 product to download.
-        is_geojson (bool): If `True`, engage the GeoJSON mode on.
-        geojson_path (str): Filepath to GeoJSON file. Needed if `is_geojson=True`
         tmp_dir (str): Temporal dir to store the files in.
         source_blob_name (str): Source name for the blob directory inside Google Cloud bucket.
+        is_geojson (bool, optional): If `True`, engage the GeoJSON mode on.
+        geojson_path (str,optional): Filepath to GeoJSON file. Needed if `is_geojson=True`
+
     Returns:
         tuple(Path, str): Local path and image_name of the downloaded blob (`blob_data`).
     """
@@ -396,7 +398,7 @@ def download_one_google_cloud(
         for blob in blobs:
             if blob.name.endswith("/") or "IMG_DATA" not in blob.name or not _matches_required_band(blob.name, required_bands):  # Ignore folders
                 continue
-            blob_data = download_blob_data(blob, product_title, is_geojson, geojson_path, tmp_dir, source_blob_name)
+            blob_data = download_blob_data(blob, product_title, tmp_dir, source_blob_name, is_geojson=is_geojson, geojson_path=geojson_path)
             local_images.append(blob_data) if not isinstance(blob_data, str) else logger.warning(blob_data)
 
         # Check if we got any bands
