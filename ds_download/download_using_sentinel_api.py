@@ -1,6 +1,7 @@
+import json
 import os
 import re
-from datetime import datetime
+import structlog
 
 import geojson
 import geomet.wkt
@@ -8,11 +9,17 @@ import requests
 
 import geopandas as gpd
 
+from collections import defaultdict
+from datetime import datetime
 from dateutil import parser as dparser
 from requests.adapters import HTTPAdapter
+from shapely.geometry import shape
 from urllib3.util.retry import Retry
 
 from ds_download.download_from_google_cloud import download_one_google_cloud
+
+logger = structlog.get_logger(__file__)
+
 
 CATALOGUE_TIMEOUT = (10, 120)
 CATALOGUE_RETRIES = 3
@@ -150,6 +157,112 @@ def find_products_sentinel_api_by_geojson_file(geojson_path: str, from_date: str
     return response
 
 
+def filter_response_by_anchor_tile(response_list: list, geojson_path: str) -> list:
+    """
+    Filters out redundant overlapping tiles for the same day.
+    If one tile consistently covers the parcel best across all samples for a date,
+    only that tile's products are kept. If no anchor tile meets the criteria, 
+    the products for the best and second best coverage tiles are retained.
+    """
+    if not response_list:
+        return response_list
+
+    # Load the parcel geometry as a Shapely object
+    with open(geojson_path, "r") as f:
+        geojson_data = json.load(f)
+    
+    parcel_geom = shape(geojson_data["features"][0]["geometry"])
+    parcel_area = parcel_geom.area
+    if parcel_area == 0:
+        logger.warning("Parcel geometry has zero area; skipping anchor tile filtering.")
+        return response_list
+
+    # Single-sweep initialization combining date grouping, metrics calculation, and tracking
+    # Group structure per date: {"tile_id": [ratios...]}, {"tile_id": [products...]}
+    date_coverages = defaultdict(lambda: defaultdict(list))
+    date_products = defaultdict(lambda: defaultdict(list))
+    date_raw_products = defaultdict(list)
+    date_valid_flag = defaultdict(bool)
+    
+    # Sweep 1: Single loop to group, calculate intersections, and track metadata properties
+    for item in response_list:
+        name = item.get("Name", "")
+        date_value = item.get("ContentDate", {}).get("Start")
+        if not name or not date_value:
+            continue
+        date_str = str(date_value)[:10]
+        
+        # Save a reference to the global daily collection
+        date_raw_products[date_str].append(item)
+        
+        footprint_data = item.get("GeoFootprint") or item.get("Footprint")
+        tile_id = name.split("_T")[-1][:5]
+        
+        if not footprint_data:
+            logger.debug(f"{date_str} | {tile_id} | no footprint available, keeping product for now.")
+            continue
+
+        try:
+            tile_geom = shape(footprint_data)
+            overlap = tile_geom.intersection(parcel_geom).area
+            coverage_ratio = overlap / parcel_area if parcel_area else 0
+            date_coverages[date_str][tile_id].append(coverage_ratio)
+            date_products[date_str][tile_id].append((item, coverage_ratio))
+            date_valid_flag[date_str] = True
+            logger.info(f"{date_str} | {tile_id} | sample coverage={coverage_ratio:.4f}")
+        except Exception as exc:
+            logger.warning(f"{date_str} | {tile_id} | failed to compute footprint coverage: {exc}")
+        
+    filtered_response = []
+
+    # Final pixel extraction step without nested data parsing loops
+    for date_str, raw_products in date_raw_products.items():
+        if len(raw_products) == 1:
+            filtered_response.append(raw_products[0])
+            continue
+
+        if not date_valid_flag[date_str]:
+            logger.warning(f"{date_str} | no valid tile footprint coverage computed, keeping all products.")
+            filtered_response.extend(raw_products)
+            continue
+
+        # Compute mean coverages from collected maps data structures
+        tile_mean_coverage = {
+            tile_id: sum(ratios) / len(ratios)
+            for tile_id, ratios in date_coverages[date_str].items()
+        }
+
+        # Sort tiles by mean coverage descending to instantly extract 1st and 2nd best paths
+        sorted_tiles = sorted(tile_mean_coverage.items(), key=lambda x: x[1], reverse=True)
+        
+        best_tile_id, best_mean = sorted_tiles[0]
+        logger.info(
+            f"{date_str} | tile mean coverages={ {k: round(v, 4) for k, v in tile_mean_coverage.items()} } | best={best_tile_id}:{best_mean:.4f}"
+        )
+
+        if best_mean > 0.9:
+            anchor_products = [prod for prod, _ in date_products[date_str][best_tile_id]]
+            filtered_response.extend(anchor_products)
+            logger.info(
+                f"Anchor tile filter active: selecting tile {best_tile_id} for date {date_str} with mean coverage {best_mean:.4f}."
+            )
+        else:
+            # Fallback logic: Fetch products for best and second best coverage tiles
+            fallback_products = [prod for prod, _ in date_products[date_str][best_tile_id]]
+            
+            second_best_log_str = "None"
+            if len(sorted_tiles) > 1:
+                second_best_tile_id, second_best_mean = sorted_tiles[1]
+                second_best_log_str = f"{second_best_tile_id}:{second_best_mean:.4f}"
+                second_best_products = [prod for prod, _ in date_products[date_str][second_best_tile_id]]
+                fallback_products.extend(second_best_products)
+                
+            logger.debug(f"Parcel is not fully contained by a single tile on {date_str} (best mean coverage {best_mean:.4f}). ")
+            logger.debug(f"Retaining best and second best coverage tiles ({best_tile_id}:{best_mean:.4f}, {second_best_log_str}).")
+            filtered_response.extend(fallback_products)
+
+    return filtered_response
+
 def download_product_using_sentinel_api(
     calculate_raw_indexes: bool, 
     calculate_intermediate_products: bool,
@@ -194,8 +307,14 @@ def download_product_using_sentinel_api(
         response = find_products_sentinel_api_by_geojson_file(geojson_path, from_date, to_date)
     else:
         raise ValueError("You must provide either a GeoJSON file or a tile ID.")
-
-    for product_metadata in response:
+    
+    # Remove overlapping tiles from repsonse
+    logger.info(f"Initial search returned {len(response)} items across boundaries.\n")
+    filetered_response = filter_response_by_anchor_tile(response, geojson_path)
+    print()
+    logger.info(f"Filtered search context down to {len(filetered_response)} clean execution targets.\n")
+    # Download product data
+    for product_metadata in filetered_response:
         for key in product_metadata:
             if "." in list(product_metadata.keys()):
                 new_key = key.replace(".", "_")

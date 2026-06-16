@@ -9,7 +9,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from ds_download.download_geojson_utils import build_geojson_monthly_composite_metadata, cleanup_geojson_product_data, geojson_monthly_index_key, get_geojson_monthly_index_products, normalize_geojson_name
+from ds_download.download_geojson_utils import build_geojson_monthly_composite_metadata, cleanup_geojson_product_data, geojson_monthly_index_key, get_geojson_monthly_index_products, normalize_geojson_name, str_to_bool
 from ds_download.download_using_sentinel_api import download_product_using_sentinel_api
 from ds_download.minio_connection import MinioConnection
 from ds_download.mongo_connection import MongoConnection
@@ -127,7 +127,7 @@ def parse_args():
     )
     parser.add_argument(
         "--quantize",
-        type=_str_to_bool,
+        type=str_to_bool,
         default=False,
         help="If True, quantizes the resulting `.tif` indexes from float32 to int16 to reduce file size. Defaults to True.",
     )
@@ -206,13 +206,13 @@ def main():
     except Exception as e:
         logger.exception("An exception occurred:")
         logger.error(str(e))
-        cleanup_geojson_product_data(
-                    args.geojson_path,
-                    args.year,
-                    month,
-                    mongo_col,
-                    minio_client,
-                )
+        # cleanup_geojson_product_data(
+        #             args.geojson_path,
+        #             args.year,
+        #             month,
+        #             mongo_col,
+        #             minio_client,
+        #         )
     finally:
         shutil.rmtree(run_tmp_dir, ignore_errors=True)
         print()
