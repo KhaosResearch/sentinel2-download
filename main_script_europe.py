@@ -434,7 +434,7 @@ def create_monthly_index_mean(
     products = get_monthly_index_products(tile, year, month, index_name, mongo_col)
     if not products:
         logger.warning(f"No products found for '{index_name.upper()} index for the following params:'")
-        logger.warning(f"    AOI: {tile} | Year: {year} | Month {month.upper()}")
+        logger.warning(f"    AOI: {tile} | Year: {year} | Month {str(month).upper()}")
         return None
 
     local_index_paths = []
@@ -613,10 +613,14 @@ def main():
             if monthly_outputs and all_monthly_outputs_exist(tile, args.year, minio_client):
                 cleanup_product_data(tile, args.year, mongo_col, minio_client)
                 shutil.rmtree(tmp_dir / tile / str(args.year), ignore_errors=True)
+    except Exception as e:
+        print()
+        logger.error(e)
+        raise e
     finally:
         shutil.rmtree(run_tmp_dir, ignore_errors=True)
         print()
-        logger.info(f"FINAL TIME: {datetime.now - init}")
+        logger.info(f"FINAL TIME: {datetime.now() - init}")
         print()
 
 if __name__ == "__main__":

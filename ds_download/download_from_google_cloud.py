@@ -37,9 +37,6 @@ def calculate_no_data(folder: str, is_geojson: bool = False) -> float:
     Returns:
         float: The percentage of no-data pixels in the image.
     """
-    # logger.debug(f"FOLDER: {folder}")
-    # band_dir = list(Path(folder).glob("GRANULE/*/IMG_DATA/R10m/*.jp2"))
-    # logger.debug(f"BAND DIR: {band_dir}")
     if is_geojson: 
         tif_options = list(Path(folder).glob(f"*B0*.tif")) or list(Path(folder).glob(f"*.tif"))
         band_dir = tif_options[0]
@@ -161,11 +158,28 @@ def _matches_required_band(blob_name: str, required_bands: list[str] = None) -> 
     return any(f"_{band}." in blob_name for band in required_bands)
 
 
+def _resolve_safe_blob_prefix(blob_name: str) -> tuple[str, str]:
+    """
+    Resolve the Google Cloud SAFE prefix and product title from any blob inside it.
+    """
+    blob_parts = Path(blob_name).parts
+    safe_index = next(
+        (index for index, part in enumerate(blob_parts) if part.endswith(".SAFE")),
+        None,
+    )
+    if safe_index is None:
+        raise ValueError(f"Could not resolve SAFE product folder from blob: {blob_name}")
+
+    safe_prefix = join(*blob_parts[:safe_index + 1])
+    resolved_title = blob_parts[safe_index].replace(".SAFE", "")
+    return safe_prefix, resolved_title
+
+
 def get_google_blobs_metadata(
         product_title: str,
         gcloud_bucket_name: str,
         storage_client: Any
-    )->tuple[list[str], str, Any]:
+    )->tuple[list[Any], str, str] | None:
     """
     Get Google Cloud files' blob list. include alternative source blob name if not found by product title.
     Args:
@@ -173,7 +187,10 @@ def get_google_blobs_metadata(
         gcloud_bucket_name (str): Google Cloud's bucket name.
         storage_client (Any): Google Cloud's storage client to get metadata.
     Returns:
-        Tuple(list[str], str): Returns files' blob list (`blobs`) and source name for the blob dir (`source_blob_name`).
+        Tuple(list, str, str): Returns files' blob list (`blobs`), source name for
+        the blob dir (`source_blob_name`), and the resolved product title. The
+        resolved product title can differ from the Sentinel API title when Google
+        Cloud stores the same product with another discriminator.
     """
 
     # Extract google cloud blob name
@@ -202,12 +219,10 @@ def get_google_blobs_metadata(
             return
         else:
             logger.debug("Alternative name found in Google Cloud")
-            product_title = blobs[0].name.split("/")[-2].replace(".SAFE", "")
-            list_of_names = ["L2/tiles", tile_number, tile_type, tile_subtype, product_title + ".SAFE"]
-            source_blob_name = join(*list_of_names)
+            source_blob_name, product_title = _resolve_safe_blob_prefix(blobs[0].name)
             logger.debug(f"Alternative product title is: {product_title}")
     
-    return blobs, source_blob_name
+    return blobs, source_blob_name, product_title
 
 
 def is_product_already_stored(
@@ -379,7 +394,10 @@ def download_one_google_cloud(
     
     # Get blobs from Google Cloud
     storage_client = storage.Client()
-    blobs, source_blob_name = get_google_blobs_metadata(product_title, gcloud_bucket_name, storage_client)
+    blobs_metadata = get_google_blobs_metadata(product_title, gcloud_bucket_name, storage_client)
+    if blobs_metadata is None:
+        return
+    blobs, source_blob_name, product_title = blobs_metadata
 
     # Connect with MongoDB and MinIO
     mongo_col = MongoConnection().get_collection_object()
@@ -441,11 +459,12 @@ def download_one_google_cloud(
         mongo_col.insert_one(metadata)
 
         # Clean up
-        try:
-            if Path.is_dir(Path(unzip_folder)):
-                shutil.rmtree(unzip_folder)
-        except OSError as e:
-            logger.exception(f"Error: {e.filename} - {e.strerror}.")
+        if is_geojson:
+            try:
+                if Path.is_dir(Path(unzip_folder)):
+                    shutil.rmtree(unzip_folder)
+            except OSError as e:
+                logger.exception(f"Error: {e.filename} - {e.strerror}.")
 
     if calculate_intermediate_products:
         calculate_raw_index(

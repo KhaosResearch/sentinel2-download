@@ -97,7 +97,10 @@ def _download_band_blobs_for_group(
     band_blobs: dict[str, list] = {band: [] for band in required_bands}
 
     for product_title in product_titles:
-        blobs, _ = get_google_blobs_metadata(product_title, bucket_name, storage_client)
+        blobs_metadata = get_google_blobs_metadata(product_title, bucket_name, storage_client)
+        if blobs_metadata is None:
+            continue
+        blobs, _, _ = blobs_metadata
         for blob in blobs:
             if blob.name.endswith("/") or "IMG_DATA" not in blob.name:
                 continue
@@ -242,7 +245,11 @@ def download_multi_tile_geojson(
                 logger.warning(f"Unable to clean local files for {product_title}: {exc}")
             continue
 
-        source_blob_name = get_google_blobs_metadata(product_titles[0], gcloud_bucket_name, storage_client)[1]
+        blobs_metadata = get_google_blobs_metadata(product_titles[0], gcloud_bucket_name, storage_client)
+        if blobs_metadata is None:
+            logger.warning(f"Could not resolve Google Cloud source metadata for {product_titles[0]}. Skipping.")
+            continue
+        source_blob_name = blobs_metadata[1]
         metadata = generate_sentinel_metadata(
             sentinel_metadata or {},
             gcloud_bucket_name,
