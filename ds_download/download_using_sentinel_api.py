@@ -172,7 +172,6 @@ def filter_response_by_anchor_tile(response_list: list, geojson_path: str) -> li
     Tuple (list[dict], bool): The filtered list (`filtered_response`) and whether the geometry hsa fallen into multiple tiles (`on_multiple_tiles`)
     """
     on_multiple_tiles = False
-
     if not response_list:
         return response_list, on_multiple_tiles
 
@@ -272,20 +271,28 @@ def filter_response_by_anchor_tile(response_list: list, geojson_path: str) -> li
                 f"Anchor tile filter active: selecting tile {best_tile_id} for date {date_str} with mean coverage {best_mean:.4f}."
             )
         else:
-            # Fallback logic: Fetch products for best and second best coverage tiles
-            fallback_products = [prod for prod, _ in date_products[date_str][best_tile_id]]
+            # SHORT-TERM SOLUTION: Discard this sample day entirely.
+            # Neither tile captured the parcel cleanly, avoiding partial file corruption.
+            logger.warning(
+                f"DISCARDING DATE {date_str}: Max available tile coverage is only {best_mean:.4f}. "
+                f"Dropping sample to protect index composition integrity."
+            )
+            # We do NOT append anything to filtered_response for this date group
+
+            # # Fallback logic: Fetch products for best and second best coverage tiles
+            # fallback_products = [prod for prod, _ in date_products[date_str][best_tile_id]]
             
-            second_best_log_str = "None"
-            if len(sorted_tiles) > 1:
-                second_best_tile_id, second_best_mean = sorted_tiles[1]
-                second_best_log_str = f"{second_best_tile_id}:{second_best_mean:.4f}"
-                second_best_products = [prod for prod, _ in date_products[date_str][second_best_tile_id]]
-                fallback_products.extend(second_best_products)
+            # second_best_log_str = "None"
+            # if len(sorted_tiles) > 1:
+            #     second_best_tile_id, second_best_mean = sorted_tiles[1]
+            #     second_best_log_str = f"{second_best_tile_id}:{second_best_mean:.4f}"
+            #     second_best_products = [prod for prod, _ in date_products[date_str][second_best_tile_id]]
+            #     fallback_products.extend(second_best_products)
                 
-            logger.debug(f"Parcel is not fully contained by a single tile on {date_str} (best mean coverage {best_mean:.4f}). ")
-            logger.debug(f"Retaining best and second best coverage tiles ({best_tile_id}:{best_mean:.4f}, {second_best_log_str}).")
-            filtered_response.extend(fallback_products)
-            on_multiple_tiles = True
+            # logger.debug(f"Parcel is not fully contained by a single tile on {date_str} (best mean coverage {best_mean:.4f}). ")
+            # logger.debug(f"Retaining best and second best coverage tiles ({best_tile_id}:{best_mean:.4f}, {second_best_log_str}).")
+            # filtered_response.extend(fallback_products)
+            # on_multiple_tiles = True
 
     return filtered_response, on_multiple_tiles
 
@@ -337,12 +344,10 @@ def download_product_using_sentinel_api(
         # Remove overlapping tiles from response
         filtered_response, on_multiple_tiles = filter_response_by_anchor_tile(response, geojson_path)
         print()
-        logger.info(f"Filtered search context down to {len(filtered_response)} clean execution targets.\n")
+        logger.info(f"Filtered search context down from {len(response)} to {len(filtered_response)} clean execution targets.\n")
     else:
         raise ValueError("You must provide either a GeoJSON file or a tile ID.")
     
-    with open("responseGeo.json", "w", encoding="utf-8") as f:
-        json.dump(filtered_response, f, indent=4, ensure_ascii=False)
 
     # Download product data
     if not on_multiple_tiles:  # For Tile/ GeoJSON in one tile: Download as usual
@@ -365,8 +370,7 @@ def download_product_using_sentinel_api(
                 quantize=quantize,
             )
     else:  # GeoJSON on multiple tiles only: stream from multiple tiles
-        print()
-        logger.info(f"Detected GeoJSON '{os.path.basename(geojson_path)}' is contained on multiple tiles. Engaging multiple tiles download pipeline.")
+        logger.info(f"Detected GeoJSON '{os.path.basename(geojson_path)}' is contained on multiple tiles. Engaging multiple tiles download pipeline.\n")
         # TODO
         # download_multi_tile_geojson(
         #     calculate_raw_indexes,

@@ -206,13 +206,13 @@ def main():
     except Exception as e:
         logger.exception("An exception occurred:")
         logger.error(str(e))
-        # cleanup_geojson_product_data(
-        #             args.geojson_path,
-        #             args.year,
-        #             month,
-        #             mongo_col,
-        #             minio_client,
-        #         )
+        cleanup_geojson_product_data(
+                    args.geojson_path,
+                    args.year,
+                    month,
+                    mongo_col,
+                    minio_client,
+                )
     finally:
         shutil.rmtree(run_tmp_dir, ignore_errors=True)
         print()
