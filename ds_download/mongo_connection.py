@@ -1,6 +1,8 @@
 import os
 from pymongo import MongoClient
 from pymongo.collection import Collection
+from dotenv import load_dotenv
+load_dotenv()
 
 class MongoConnection:
     """

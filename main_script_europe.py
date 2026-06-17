@@ -2,9 +2,11 @@ from argparse import ArgumentParser
 from datetime import datetime
 from hashlib import sha256
 import os
+import re
 from os.path import join
 from pathlib import Path
 import shutil
+import structlog
 
 import geopandas as gpd
 import numpy as np
@@ -15,7 +17,10 @@ from dotenv import load_dotenv
 from shapely.geometry import box
 from shapely.validation import make_valid
 
-from ds_download.download_using_sentinel_api import download_product_using_sentinel_api, find_products_sentinel_api_by_tile_id
+from ds_download.download_using_sentinel_api import (
+    download_product_using_sentinel_api,
+    find_products_sentinel_api_by_tile_id,
+)
 from ds_download.minio_connection import MinioConnection
 from ds_download.mongo_connection import MongoConnection
 from ds_download.raw_index_calculation import INT16_NODATA, calculate_raw_index, compress_and_quantize_tiff
@@ -34,6 +39,7 @@ REQUIRED_BANDS = ["B03_10m", "B04_10m", "B08_10m"]
 MONTHS = range(1, 13)
 OLD_MONTHLY_INDEX_FILENAMES = {"NDWI": "NDWI_mean.tif"}
 
+logger = structlog.get_logger(__file__)
 
 def parse_args():
     parser = ArgumentParser(description="Download Sentinel-2 products for Europe land tiles and calculate monthly indexes.")
@@ -270,7 +276,7 @@ def migrate_old_monthly_output(
     minio_client.fget_object(minio_client.bucket_name, old_key, str(local_path))
     minio_client.fput_object(minio_client.bucket_name, new_key, local_path, content_type="image/tif")
     minio_client.remove_object(minio_client.bucket_name, old_key)
-    print(f"Migrated monthly {index_name} mean: {old_key} -> {new_key}")
+    logger.info(f"Migrated monthly {index_name} mean: {old_key} -> {new_key}")
     return new_key
 
 
@@ -287,7 +293,7 @@ def missing_indexes_for_month(
     for index_name in indexes:
         object_name = migrate_old_monthly_output(tile, year, month, index_name, mongo_col, minio_client, tmp_dir)
         if object_name:
-            print(f"Skipping existing monthly {index_name} mean: {object_name}")
+            logger.info(f"Skipping existing monthly {index_name} mean: {object_name}")
         else:
             missing_indexes.append(index_name)
     return missing_indexes
@@ -427,6 +433,8 @@ def create_monthly_index_mean(
     start_date, _ = month_range(year, month)
     products = get_monthly_index_products(tile, year, month, index_name, mongo_col)
     if not products:
+        logger.warning(f"No products found for '{index_name.upper()} index for the following params:'")
+        logger.warning(f"    AOI: {tile} | Year: {year} | Month {month.upper()}")
         return None
 
     local_index_paths = []
@@ -501,7 +509,7 @@ def process_tile_month(tile: str, year: int, month: int, indexes: list[str] | No
             return f"Skipped {tile} {year}-{month:02}: monthly indexes already exist"
 
         month_start, month_end = month_range(year, month)
-        print(f"Downloading products for {tile} in {month_start.strftime('%B')} {year}")
+        logger.info(f"Downloading products for {tile} in {month_start.strftime('%B')} {year}")
         download_product_using_sentinel_api(
             calculate_raw_indexes=False,
             calculate_intermediate_products=False,
@@ -513,7 +521,7 @@ def process_tile_month(tile: str, year: int, month: int, indexes: list[str] | No
 
         product_titles = get_product_titles(tile, month_start, month_end, mongo_col)
         for product_title in product_titles:
-            print(f"Calculating {', '.join(missing_indexes)} for {product_title}")
+            logger.info(f"Calculating {', '.join(missing_indexes)} for {product_title}")
             calculate_raw_index(product_title=product_title, index=missing_indexes)
 
         outputs = []
@@ -530,7 +538,7 @@ def process_tile_month(tile: str, year: int, month: int, indexes: list[str] | No
             )
             if output_key:
                 outputs.append(output_key)
-                print(f"Uploaded monthly {index_name} mean: {output_key}")
+                logger.info(f"Uploaded monthly {index_name} mean: {output_key}")
 
         if monthly_outputs_exist(tile, year, month, minio_client, indexes):
             cleanup_product_data(tile, year, mongo_col, minio_client, month=month)
@@ -545,6 +553,7 @@ def process_tile_month(tile: str, year: int, month: int, indexes: list[str] | No
 
 
 def main():
+    init = datetime.now()
     load_dotenv(".env")
     args = parse_args()
     base_tmp_dir = Path(os.environ.get("TMP_DIR", "tmp"))
@@ -552,7 +561,7 @@ def main():
     run_tmp_dir.mkdir(parents=True, exist_ok=True)
     os.environ["TMP_DIR"] = str(run_tmp_dir)
 
-    start_date, end_date = year_range(args.year)
+    # start_date, end_date = year_range(args.year)
     mongo_connection = MongoConnection()
     mongo_col = mongo_connection.get_collection_object()
     composite_col = mongo_connection.get_composite_collection_object()
@@ -568,7 +577,7 @@ def main():
 
             for month in missing_by_month:
                 month_start, month_end = month_range(args.year, month)
-                print(f"Downloading products for {tile} in {month_start.strftime('%B')} {args.year}")
+                logger.info(f"Downloading products for {tile} in {month_start.strftime('%B')} {args.year}")
                 download_product_using_sentinel_api(
                     calculate_raw_indexes=False,
                     calculate_intermediate_products=False,
@@ -581,7 +590,7 @@ def main():
             for month, missing_indexes in missing_by_month.items():
                 month_start, month_end = month_range(args.year, month)
                 for product_title in get_product_titles(tile, month_start, month_end, mongo_col):
-                    print(f"Calculating {', '.join(missing_indexes)} for {product_title}")
+                    logger.info(f"Calculating {', '.join(missing_indexes)} for {product_title}")
                     calculate_raw_index(product_title=product_title, index=missing_indexes)
 
             monthly_outputs = []
@@ -599,14 +608,16 @@ def main():
                     )
                     if output_key:
                         monthly_outputs.append(output_key)
-                        print(f"Uploaded monthly {index_name} mean: {output_key}")
+                        logger.info(f"Uploaded monthly {index_name} mean: {output_key}")
 
             if monthly_outputs and all_monthly_outputs_exist(tile, args.year, minio_client):
                 cleanup_product_data(tile, args.year, mongo_col, minio_client)
                 shutil.rmtree(tmp_dir / tile / str(args.year), ignore_errors=True)
     finally:
         shutil.rmtree(run_tmp_dir, ignore_errors=True)
-
+        print()
+        logger.info(f"FINAL TIME: {datetime.now - init}")
+        print()
 
 if __name__ == "__main__":
     main()

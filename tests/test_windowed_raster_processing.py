@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import unittest.mock
 from datetime import datetime
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import rasterio
 from rasterio.transform import from_origin
 
 from ds_download.band_arithmetic import ndvi, ndwi
+from main_script_geojson import create_monthly_geojson_index_mean
 from main_script_europe import build_monthly_composite_metadata, upsert_monthly_composite_metadata, write_windowed_mean
 
 
@@ -17,6 +19,20 @@ class FakeCompositeCollection:
 
     def update_one(self, query, update, upsert=False):
         self.calls.append((query, update, upsert))
+
+
+class FakeMinioClient:
+    bucket_name = "test-bucket"
+
+    def __init__(self, objects):
+        self.objects = objects
+        self.uploads = []
+
+    def fget_object(self, bucket_name, object_name, file_path):
+        Path(file_path).write_bytes(Path(self.objects[object_name]).read_bytes())
+
+    def fput_object(self, bucket_name, object_name, file_path, content_type=None):
+        self.uploads.append((bucket_name, object_name, Path(file_path), content_type))
 
 
 class WindowedRasterProcessingTest(unittest.TestCase):
@@ -205,6 +221,98 @@ class WindowedRasterProcessingTest(unittest.TestCase):
                 "rasterS3Key": index_key,
             },
         )
+
+    def test_geojson_monthly_mean_keeps_float_ndwi_and_ndvi_ground_truth(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            transform = from_origin(0, 2, 1, 1)
+            metadata = {
+                "driver": "GTiff",
+                "height": 2,
+                "width": 2,
+                "count": 1,
+                "dtype": rasterio.int16,
+                "crs": "EPSG:32630",
+                "transform": transform,
+                "nodata": -32768,
+            }
+
+            product_titles = [
+                "S2A_MSIL2A_20240101T105301_N0510_R051_T30SUF_20240101T125001",
+                "S2B_MSIL2A_20240111T105259_N0510_R051_T30SUF_20240111T125417",
+            ]
+            source_values = {
+                "p1_ndwi": np.array([[-2000, -1000], [-32768, -500]], dtype=np.int16),
+                "p2_ndwi": np.array([[-1000, -3000], [-2000, -32768]], dtype=np.int16),
+                "p1_ndvi": np.array([[3000, 4000], [-32768, 2000]], dtype=np.int16),
+                "p2_ndvi": np.array([[1000, 2000], [5000, -32768]], dtype=np.int16),
+            }
+            object_paths = {}
+            for object_name, data in source_values.items():
+                path = tmp_path / f"{object_name}.tif"
+                with rasterio.open(path, "w", **metadata) as dst:
+                    dst.write(data, 1)
+                object_paths[f"indexes/{object_name}.tif"] = path
+
+            products_by_index = {
+                "ndwi": [
+                    {"title": product_titles[0], "indexes": {"ndwi": {"rasterS3Key": "indexes/p1_ndwi.tif"}}},
+                    {"title": product_titles[1], "indexes": {"ndwi": {"rasterS3Key": "indexes/p2_ndwi.tif"}}},
+                ],
+                "ndvi": [
+                    {"title": product_titles[0], "indexes": {"ndvi": {"rasterS3Key": "indexes/p1_ndvi.tif"}}},
+                    {"title": product_titles[1], "indexes": {"ndvi": {"rasterS3Key": "indexes/p2_ndvi.tif"}}},
+                ],
+            }
+            minio_client = FakeMinioClient(object_paths)
+            composite_col = FakeCompositeCollection()
+
+            with unittest.mock.patch(
+                "main_script_geojson.get_geojson_monthly_index_products",
+                side_effect=lambda geojson_path, year, month, index_name, mongo_col: products_by_index[index_name.lower()],
+            ):
+                ndwi_key = create_monthly_geojson_index_mean(
+                    "test.geojson",
+                    2024,
+                    1,
+                    "NDWI",
+                    object(),
+                    composite_col,
+                    minio_client,
+                    tmp_path / "monthly",
+                )
+                ndvi_key = create_monthly_geojson_index_mean(
+                    "test.geojson",
+                    2024,
+                    1,
+                    "NDVI",
+                    object(),
+                    composite_col,
+                    minio_client,
+                    tmp_path / "monthly",
+                )
+
+            self.assertTrue(ndwi_key.endswith("/indexes/ndwi.tif"))
+            self.assertTrue(ndvi_key.endswith("/indexes/ndvi.tif"))
+            self.assertEqual(len(minio_client.uploads), 2)
+
+            uploaded = {Path(upload[2]).name: upload[2] for upload in minio_client.uploads}
+            with rasterio.open(uploaded["ndwi.tif"]) as ndwi_src, rasterio.open(uploaded["ndvi.tif"]) as ndvi_src:
+                ndwi = ndwi_src.read(1)
+                ndvi = ndvi_src.read(1)
+
+                self.assertEqual(ndwi_src.dtypes[0], "float32")
+                self.assertEqual(ndvi_src.dtypes[0], "float32")
+                np.testing.assert_allclose(
+                    ndwi,
+                    np.array([[-0.15, -0.2], [-0.2, -0.05]], dtype=np.float32),
+                    equal_nan=True,
+                )
+                np.testing.assert_allclose(
+                    ndvi,
+                    np.array([[0.2, 0.3], [0.5, 0.2]], dtype=np.float32),
+                    equal_nan=True,
+                )
 
 
 if __name__ == "__main__":

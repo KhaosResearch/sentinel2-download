@@ -2,7 +2,11 @@ import time
 from datetime import datetime, timedelta
 from ds_download.download_using_sentinel_api import download_product_using_sentinel_api
 from ds_download.compute_composite import create_composite_by_tile_and_date
+import structlog
+from dotenv import load_dotenv
+logger = structlog.get_logger()
 
+load_dotenv
 # Define the path for the log file
 log_file_path = "execution_time_log.txt"
 
@@ -24,7 +28,7 @@ def log_time(file_path: str, year: int, month: int, tile: str, function_name: st
     with open(file_path, 'a') as log_file:
         log_file.write(f"Year: {year}, Month: {month}, Tile: {tile}, Function: {function_name}, Time: {execution_time:.2f} seconds\n")
 
-def main_workflow(tiles: list, year: int, from_month: int, to_month: int) -> None:
+def main_workflow(tiles: list, year: int, from_month: int, to_month: int, delete_products: bool = True) -> None:
     """
     Main workflow to download Sentinel-2 products and create composites, logging execution times for each step.
 
@@ -33,6 +37,7 @@ def main_workflow(tiles: list, year: int, from_month: int, to_month: int) -> Non
         year (int): The year to process.
         from_month (int): The starting month to process.
         to_month (int): The ending month to process.
+        delete_products (bool): Whether to delete the raw products after creating the composite.
 
     Returns:
         None
@@ -51,25 +56,33 @@ def main_workflow(tiles: list, year: int, from_month: int, to_month: int) -> Non
                 
                 # Measure time for create_composite_by_tile_and_date
                 start_time = time.time()
-                create_composite_by_tile_and_date(True, False, tile, init_date, end_date, 30)
+                create_composite_by_tile_and_date(True, False, tile, init_date, end_date, 30, delete_products)
                 composite_time = time.time() - start_time
                 log_time(log_file_path, year, month, tile, 'create_composite_by_tile_and_date', composite_time)
 
             except Exception as e:
                 error_message = f"Year: {year}, Month: {month}, Tile: {tile}, Error: {str(e)}"
+                logger.exception(str(e))
                 with open(log_file_path, 'a') as log_file:
                     log_file.write(error_message + "\n")
                 print(error_message)
                 continue
 
 if __name__ == "__main__":
-    # List of tiles to process
-    tiles = ["31STF"]
-    
+    # Andalusia Tiles
+    tiles = ["29SPC", "29SQC", "30STH", "30SUH", "30SVH", "30SWH", "30SXH", "30SYH", "30SXG", 
+            "30SWG", "30SVG", "30SUG", "30STG", "29SQB" ,"29SPB", "30STF", "30SUF", 
+            "30SVF", "30SWF"
+            ]
+    start_year = 2017
+    start_month = 1
+    end_year = 2025
+    end_month = 12
+
     # Clear the log file at the beginning of the execution
     open(log_file_path, 'w').close()  # This clears the content of the log file
 
-    # Loop through the years from 2018 to 2023 and process each year
-    years = range(2018, 2024)
+    # Loop through the years and process each year
+    years = range(start_year, end_year + 1)
     for year in years:
-        main_workflow(tiles, year, 1, 12)
+        main_workflow(tiles, year, start_month, end_month)

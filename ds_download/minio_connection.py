@@ -1,5 +1,7 @@
 import os
 from minio import Minio
+from dotenv import load_dotenv
+load_dotenv()
 
 class MinioConnection(Minio):
     """
