@@ -39,7 +39,8 @@ def download_one_google_cloud(
     calculate_raw_indexes: bool,
     calculate_intermediate_products: bool,
     product_title: str,
-    sentinel_metadata: dict = {}
+    sentinel_metadata: dict = {},
+    quantize_rasters: bool = False
 ) -> None:
     """
     Download a Sentinel-2 product from Google Cloud, process it, and upload to MinIO and Mongo.
@@ -205,6 +206,7 @@ def download_one_google_cloud(
             product_title=product_title,
             index=["CloudMask"],
             minio_folder_name="intermediateProducts",
+            quantize_rasters=quantize_rasters,
         )
 
     if calculate_raw_indexes:
@@ -215,4 +217,5 @@ def download_one_google_cloud(
                 "EVI2", "NDRE", "NDYI", "MNDWI", "BRI", "TCI", 
                 "RI", "BSI", "CRI1"
             ],
+            quantize_rasters=quantize_rasters,
         )

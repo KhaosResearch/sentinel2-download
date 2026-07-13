@@ -18,6 +18,7 @@ from ds_download.mongo_connection import MongoConnection
 
 from ds_download.raw_index_calculation import calculate_raw_index
 from ds_download.band_arithmetic import _rescale_band
+from ds_download.raster_encoding import encode_geotiff
 
 def get_products_by_tile_and_date(tile, start_date, end_date, min_useful_data_percentage):
 
@@ -184,12 +185,15 @@ def _composite(
 
     Parameters:
         band_paths (List[str]) : List of paths to calculate the composite from.
-        method (str) : To calculate the composite. Values: "median".
+        method (str) : To calculate the composite. Values: "median", "mean".
         cloud_masks (List[np.ndarray]) : Cloud masks of each band, cloudy pixels would not be taken into account for making the composite.
 
     Returns:
         (composite_out, composite_kwargs) (Tuple[np.ndarray, dict]) : Tuple containing the numpy array of the composed band, along with its kwargs.
     """
+    if cloud_masks is None:
+        cloud_masks = []
+
     composite_bands = []
     composite_kwargs = None
     for i in range(len(band_paths)):
@@ -221,6 +225,8 @@ def _composite(
         raise ValueError(f"Not all bands have the same shape\n{shapes}")
     elif method == "median":
         composite_out = np.nanmedian(composite_bands, axis=0)
+    elif method == "mean":
+        composite_out = np.nanmean(composite_bands, axis=0)
     else:
         raise ValueError(f"Method '{method}' is not recognized.")
 
@@ -270,8 +276,41 @@ def _get_composite(
     return composite_metadata
 
 
+def _get_product_prefix(product_title: str) -> str:
+    splits = product_title.split("_T")
+    tile_id = str(splits[1][0:5])
+    splits = product_title.split("_")
+    year = splits[2][0:4]
+    month = datetime.strptime(splits[2][4:6], "%m")
+    return join(tile_id, year, month.strftime("%B"), "products", product_title, "")
+
+
+def _cleanup_products_from_minio(products_metadata: Iterable[dict], minio_client: MinioConnection) -> None:
+    bucket_name = minio_client.bucket_name
+    mongo_collection = MongoConnection().get_collection_object()
+    for product_metadata in products_metadata:
+        product_title = product_metadata["title"]
+        prefix = _get_product_prefix(product_title)
+        objects = list(minio_client.list_objects(bucket_name, prefix=prefix, recursive=True))
+        for obj in objects:
+            minio_client.remove_object(bucket_name=bucket_name, object_name=obj.object_name)
+        mongo_collection.update_many(
+            {"title": product_title},
+            {"$unset": {"indexes": "", "intermediateProducts": ""}},
+        )
+        print(f"Deleted {len(objects)} product objects from {bucket_name}:{prefix}")
+
+
 def _create_composite(
-    products_metadata: Iterable[dict]
+    products_metadata: Iterable[dict],
+    method: str = "median",
+    include_indexes: bool = False,
+    period: str = "monthly",
+    period_label: str = None,
+    storage_year: int = None,
+    storage_period: str = None,
+    cleanup_products: bool = False,
+    quantize_rasters: bool = False
 ) -> None:
     """
     Compose multiple Sentinel-2 products into a new product, this product is called "composite".
@@ -292,9 +331,11 @@ def _create_composite(
 
     tmp_dir = os.environ.get("TMP_DIR")
 
+    products_metadata = list(products_metadata)
     products_titles = []
     products_dates = []
     bands_paths_products = []
+    indexes_paths_products = []
     cloud_masks_temp_paths = []
     cloud_masks = {"10": [], "20": [], "60": []}
     scl_cloud_values = [3, 8, 9, 10]
@@ -309,7 +350,13 @@ def _create_composite(
             product_title, minio_client, False
         )
         bands_paths_product = list(compress(rasters_paths, is_band))
+        indexes_paths_product = [
+            raster_path
+            for raster_path, raster_is_band in zip(rasters_paths, is_band)
+            if not raster_is_band and "/indexes/" in raster_path
+        ]
         bands_paths_products.append(bands_paths_product)
+        indexes_paths_products.append(indexes_paths_product)
 
         # Download cloud masks in all different spatial resolutions
         for band_path in bands_paths_product:
@@ -317,6 +364,7 @@ def _create_composite(
             band_filename = _get_raster_filename_from_path(band_path)
             if "SCL" in band_name:
                 temp_dir_product = f"{tmp_dir}/{product_title}"
+                Path(temp_dir_product).mkdir(exist_ok=True, parents=True)
                 temp_path_product_band = f"{temp_dir_product}/{band_filename}"
                 minio_client.fget_object(bucket_name, band_path, str(temp_path_product_band))
                 cloud_masks_temp_paths.append(temp_path_product_band)
@@ -349,89 +397,134 @@ def _create_composite(
     temp_path_composite = Path(tmp_dir, composite_title)
 
     uploaded_composite_band_paths = []
+    uploaded_composite_index_paths = []
+    uploaded_composite_indexes = {}
     temp_paths_composite_bands = []
     temp_product_dirs = []
     result = None
     try:
-        composite_bands_dict = defaultdict(list)
-        for bands_paths_product in bands_paths_products:
-            for band_path in bands_paths_product:
-                band_name = _get_raster_name_from_path(band_path)
-                band_filename = _get_raster_filename_from_path(band_path)
-                if "SCL" in band_name:
+        if include_indexes and any(not paths for paths in indexes_paths_products):
+            missing_titles = [
+                product_metadata["title"]
+                for product_metadata, paths in zip(products_metadata, indexes_paths_products)
+                if not paths
+            ]
+            raise ValueError(f"Missing product index rasters for seasonal composite: {missing_titles}")
+
+        rasters_to_compose = [("raw", bands_paths_products, True)]
+        if include_indexes:
+            rasters_to_compose.append(("indexes", indexes_paths_products, False))
+
+        for minio_folder_name, raster_paths_products, apply_cloud_masks in rasters_to_compose:
+            composite_bands_dict = defaultdict(list)
+            for paths_product in raster_paths_products:
+                for raster_path in paths_product:
+                    raster_name = _get_raster_name_from_path(raster_path)
+                    raster_filename = _get_raster_filename_from_path(raster_path)
+                    if minio_folder_name == "raw" and "SCL" in raster_name:
+                        continue
+                    composite_bands_dict[raster_filename].append(raster_path)
+
+            for band_filename, band_paths in composite_bands_dict.items():
+
+                if len(band_paths) != len(products_titles):
+                    print(
+                        f"Raster {band_filename} is missing in some products, it will not be included in the composite"
+                    )
                     continue
-                composite_bands_dict[band_filename].append(band_path)
-                
-        for band_filename, band_paths in composite_bands_dict.items():
 
-            if len(band_paths) != len(products_titles):
-                print(
-                    f"Band {band_filename} is missing in some products, it will not be included in the composite"
+                band_name = _get_raster_name_from_path(band_paths[0])
+                if minio_folder_name == "raw" and "SCL" in band_name:
+                    continue
+                temp_path_composite_band = Path(temp_path_composite, minio_folder_name, band_filename)
+
+                temp_path_list = []
+
+                for band_path in band_paths:
+                    product_title = band_path.split("/")[4]
+
+                    temp_dir_product = f"{tmp_dir}/{product_title}/{minio_folder_name}"
+                    Path(temp_dir_product).mkdir(exist_ok=True, parents=True)
+                    temp_path_product_band = f"{temp_dir_product}/{band_filename}"
+                    minio_client.fget_object(bucket_name, band_path, str(temp_path_product_band))
+
+                    if temp_dir_product not in temp_product_dirs:
+                        temp_product_dirs.append(temp_dir_product)
+                    temp_path_list.append(temp_path_product_band)
+
+                spatial_resolution = str(
+                    int(_get_spatial_resolution_raster(temp_path_list[0]))
                 )
-                continue
+                raster_cloud_masks = cloud_masks[spatial_resolution] if apply_cloud_masks else []
+                composite_i_band, kwargs_composite = _composite(
+                    temp_path_list,
+                    method=method,
+                    cloud_masks=raster_cloud_masks,
+                )
 
-            band_name = _get_raster_name_from_path(band_paths[0])
-            if "SCL" in band_name:
-                continue
-            temp_path_composite_band = Path(temp_path_composite, band_filename)
+                # Save raster to disk
+                temp_path_composite_band.parent.mkdir(exist_ok=True, parents=True)
 
-            temp_path_list = []
+                temp_path_composite_band = str(temp_path_composite_band)
+                if temp_path_composite_band.endswith(".jp2"):
+                    temp_path_composite_band = temp_path_composite_band[:-3] + "tif"
 
-            for band_path in band_paths:
-                product_title = band_path.split("/")[4]
+                temp_path_composite_band = Path(temp_path_composite_band)
 
-                temp_dir_product = f"{tmp_dir}/{product_title}"
-                temp_path_product_band = f"{temp_dir_product}/{band_filename}"
-                minio_client.fget_object(bucket_name, band_path, str(temp_path_product_band))
+                temp_paths_composite_bands.append(temp_path_composite_band)
 
-                if temp_dir_product not in temp_product_dirs:
-                    temp_product_dirs.append(temp_dir_product)
-                temp_path_list.append(temp_path_product_band)
+                with rasterio.open(
+                    temp_path_composite_band, "w", **kwargs_composite
+                ) as file_composite:
+                    file_composite.write(composite_i_band)
 
-            spatial_resolution = str(
-                int(_get_spatial_resolution_raster(temp_path_list[0]))
-            )
-            composite_i_band, kwargs_composite = _composite(
-                temp_path_list,
-                method="median",
-                cloud_masks=cloud_masks[spatial_resolution],
-            )
-
-            # Save raster to disk
-            if not Path.is_dir(temp_path_composite):
-                Path.mkdir(temp_path_composite)
-
-            temp_path_composite_band = str(temp_path_composite_band)
-            if temp_path_composite_band.endswith(".jp2"):
-                temp_path_composite_band = temp_path_composite_band[:-3] + "tif"
-
-            temp_path_composite_band = Path(temp_path_composite_band)
-
-            temp_paths_composite_bands.append(temp_path_composite_band)
-
-            with rasterio.open(
-                temp_path_composite_band, "w", **kwargs_composite
-            ) as file_composite:
-                file_composite.write(composite_i_band)
-
-            # Upload raster to minio
-            band_filename = band_filename[:-3] + "tif"
-            splits = composite_title.split("_T")
-            tile_id = str(splits[1][0:5])
-            splits = composite_title.split("_")
-            year = splits[2][0:4]
-            month = datetime.strptime(splits[2][4:6], "%m")
-            minio_band_path = join(tile_id, year, month.strftime("%B"), "composites", composite_title, "raw", band_filename)
-            minio_client.fput_object(
-                bucket_name=bucket_name,
-                object_name=minio_band_path,
-                file_path=temp_path_composite_band,
-                content_type="image/tif",
-            )
-            uploaded_composite_band_paths.append(minio_band_path)
-            print(
-                f"Uploaded raster: -> {temp_path_composite_band} into {bucket_name}:{minio_band_path}"
-            )
+                # Upload raster to minio
+                band_filename = band_filename[:-3] + "tif" if band_filename.endswith(".jp2") else band_filename
+                raster_kind = "band" if minio_folder_name == "raw" or Path(band_filename).stem == "tci" else "index"
+                upload_path, encoding = encode_geotiff(
+                    temp_path_composite_band,
+                    raster_kind,
+                    quantize_rasters,
+                )
+                if upload_path != temp_path_composite_band:
+                    temp_paths_composite_bands.append(upload_path)
+                splits = composite_title.split("_T")
+                tile_id = str(splits[1][0:5])
+                splits = composite_title.split("_")
+                year = storage_year or int(splits[2][0:4])
+                month = datetime.strptime(splits[2][4:6], "%m")
+                period_folder = storage_period or month.strftime("%B")
+                minio_band_path = join(
+                    tile_id,
+                    str(year),
+                    period_folder,
+                    "composites",
+                    composite_title,
+                    minio_folder_name,
+                    band_filename,
+                )
+                minio_client.fput_object(
+                    bucket_name=bucket_name,
+                    object_name=minio_band_path,
+                    file_path=upload_path,
+                    content_type="image/tif",
+                )
+                if minio_folder_name == "indexes":
+                    uploaded_composite_index_paths.append(minio_band_path)
+                    index_name = Path(band_filename).stem
+                    uploaded_composite_indexes[index_name] = {
+                        "name": index_name,
+                        "rasterS3Bucket": bucket_name,
+                        "rasterS3Key": minio_band_path,
+                        "rasterMeanValue": float(np.nanmean(composite_i_band)),
+                    }
+                    if encoding:
+                        uploaded_composite_indexes[index_name]["encoding"] = encoding
+                else:
+                    uploaded_composite_band_paths.append(minio_band_path)
+                print(
+                    f"Uploaded raster: -> {temp_path_composite_band} into {bucket_name}:{minio_band_path}"
+                )
 
         composite_metadata = dict()
         composite_metadata["title"] = composite_title
@@ -443,17 +536,35 @@ def _create_composite(
             max(products_dates)
         )
         composite_metadata["S3Bucket"] = bucket_name
-        composite_metadata["S3BandsPrefix"] = minio_band_path = join(tile_id, year, month.strftime("%B"), "composites", composite_title, "raw", "")
+        composite_metadata["S3BandsPrefix"] = join(tile_id, str(year), period_folder, "composites", composite_title, "raw", "")
+        if quantize_rasters:
+            composite_metadata["rawEncoding"] = {
+                "compressed": True,
+                "quantized": True,
+                "dtype": "uint16",
+                "scale": 1,
+                "offset": 0,
+                "nodata": 0,
+            }
+        if include_indexes:
+            composite_metadata["S3IndexesPrefix"] = join(tile_id, str(year), period_folder, "composites", composite_title, "indexes", "")
+            composite_metadata["indexes"] = uploaded_composite_indexes
         composite_metadata["tile"] = tile_id
+        composite_metadata["period"] = period
+        composite_metadata["periodLabel"] = period_label
+        composite_metadata["compositeMethod"] = method
 
         # Upload metadata to mongo
         result = mongo_composites_collection.insert_one(composite_metadata)
         print("Inserted data in mongo, id: ", result.inserted_id)
 
+        if cleanup_products:
+            _cleanup_products_from_minio(products_metadata, minio_client)
+
     except (Exception, KeyboardInterrupt) as e:
         print("Removing uncompleted composite from minio")
         traceback.print_exc()
-        for composite_band in uploaded_composite_band_paths:
+        for composite_band in uploaded_composite_band_paths + uploaded_composite_index_paths:
             minio_client.remove_object(
                 bucket_name=bucket_name, object_name=composite_band
             )
@@ -465,7 +576,9 @@ def _create_composite(
 
     finally:
         for composite_band in temp_paths_composite_bands + cloud_masks_temp_paths:
-            Path.unlink(Path(composite_band))
+            path = Path(composite_band)
+            if path.exists():
+                Path.unlink(path)
 
     return composite_metadata
 
@@ -475,7 +588,15 @@ def create_composite_by_tile_and_date(
     tile: str, 
     start_date: datetime, 
     end_date: datetime, 
-    min_useful_data_percentage: float
+    min_useful_data_percentage: float,
+    method: str = "median",
+    include_product_indexes: bool = False,
+    period: str = "monthly",
+    period_label: str = None,
+    storage_year: int = None,
+    storage_period: str = None,
+    cleanup_products: bool = False,
+    quantize_rasters: bool = False
 ) -> None:
     """
     Create a composite by tile and date range.
@@ -493,18 +614,29 @@ def create_composite_by_tile_and_date(
                 products_metadata
             )
     if composite_metadata is None:
-        composite_metadata = _create_composite(products_metadata)
+        composite_metadata = _create_composite(
+            products_metadata,
+            method=method,
+            include_indexes=include_product_indexes,
+            period=period,
+            period_label=period_label,
+            storage_year=storage_year,
+            storage_period=storage_period,
+            cleanup_products=cleanup_products,
+            quantize_rasters=quantize_rasters,
+        )
         
         # Check if there was another composite for the same month and tile
-        mongo_composite_col = MongoConnection().get_composite_collection_object()
-        cursor = mongo_composite_col.find({"$and":[{"tile":tile}, {"title":{"$regex":f"{start_date.year}{start_date.month:02}"}}]})
-        composites_for_month_and_tile = list(cursor)
-        if len(composites_for_month_and_tile) > 1:
-            print("There is more than one composite for the same month and tile")
-            for composite in composites_for_month_and_tile:
-                if composite["title"] != composite_metadata["title"]:
-                    print(f"Deleting composite {composite['title']}")
-                    mongo_composite_col.delete_one({"_id":composite["_id"]})
+        if period == "monthly":
+            mongo_composite_col = MongoConnection().get_composite_collection_object()
+            cursor = mongo_composite_col.find({"$and":[{"tile":tile}, {"title":{"$regex":f"{start_date.year}{start_date.month:02}"}}]})
+            composites_for_month_and_tile = list(cursor)
+            if len(composites_for_month_and_tile) > 1:
+                print("There is more than one composite for the same month and tile")
+                for composite in composites_for_month_and_tile:
+                    if composite["title"] != composite_metadata["title"]:
+                        print(f"Deleting composite {composite['title']}")
+                        mongo_composite_col.delete_one({"_id":composite["_id"]})
     else:
         print("The composite is already in mongo. Nothing to do")
 
@@ -518,7 +650,8 @@ def create_composite_by_tile_and_date(
                 "CloudMask",
             ],
             minio_folder_name="intermediateProducts",
-            is_composite=True
+            is_composite=True,
+            quantize_rasters=quantize_rasters
         )
 
     if calculate_raw_indexes:
@@ -542,6 +675,41 @@ def create_composite_by_tile_and_date(
                 "BSI",
                 "CRI1"
             ],
-            is_composite=True
+            is_composite=True,
+            quantize_rasters=quantize_rasters
         )
 
+
+def get_season_date_ranges(year: int) -> List[Tuple[str, datetime, datetime]]:
+    return [
+        ("Winter", datetime(year - 1, 12, 1), datetime(year, 3, 1)),
+        ("Spring", datetime(year, 3, 1), datetime(year, 6, 1)),
+        ("Summer", datetime(year, 6, 1), datetime(year, 9, 1)),
+        ("Autumn", datetime(year, 9, 1), datetime(year, 12, 1)),
+    ]
+
+
+def create_seasonal_composites_by_tile_and_year(
+    tile: str,
+    year: int,
+    min_useful_data_percentage: float,
+    cleanup_products: bool = True,
+    quantize_rasters: bool = False,
+) -> None:
+    for season_name, start_date, end_date in get_season_date_ranges(year):
+        create_composite_by_tile_and_date(
+            calculate_raw_indexes=False,
+            calculate_intermediate_products=False,
+            tile=tile,
+            start_date=start_date,
+            end_date=end_date,
+            min_useful_data_percentage=min_useful_data_percentage,
+            method="mean",
+            include_product_indexes=True,
+            period="seasonal",
+            period_label=season_name,
+            storage_year=year,
+            storage_period=season_name,
+            cleanup_products=cleanup_products,
+            quantize_rasters=quantize_rasters,
+        )

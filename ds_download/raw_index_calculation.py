@@ -27,6 +27,7 @@ from ds_download.band_arithmetic import (
 )
 from ds_download.minio_connection import MinioConnection
 from ds_download.mongo_connection import MongoConnection
+from ds_download.raster_encoding import encode_geotiff
 
 load_dotenv(".env")
 
@@ -59,7 +60,7 @@ def find_product_image(band_name: str, product_title: str) -> Path:
     product_folder = join(os.environ.get("TMP_DIR"), product_title)
     return ([f for f in Path(product_folder).glob("*" + band_name + "*")])[0]
 
-def get_index(index_name, bands_dict, product_title, minio_folder_name, is_composite):
+def get_index(index_name, bands_dict, product_title, minio_folder_name, is_composite, quantize_rasters=False):
 
     band_extension = ".tif" if is_composite else ".jp2"
 
@@ -192,10 +193,13 @@ def get_index(index_name, bands_dict, product_title, minio_folder_name, is_compo
     tif_minio_path = join(minio_dir, product_title, minio_folder_name ,index_name + ".tif")
 
 
+    raster_kind = "mask" if index_name == "cloudmask" else "band" if index_name == "tci" else "index"
+    upload_path, encoding = encode_geotiff(output, raster_kind, quantize_rasters)
+
     minio_client.fput_object(
         minio_bucket_name,
         tif_minio_path,
-        indexes_folder + "/" + index_name + ".tif",
+        upload_path,
         content_type="image/tif",
     )
 
@@ -212,6 +216,8 @@ def get_index(index_name, bands_dict, product_title, minio_folder_name, is_compo
         "bands": band,
         "rasterMeanValue": float(index_value) if index_value is not None else index_value
     }
+    if encoding:
+        index_dict["encoding"] = encoding
 
     return index_dict
 
@@ -220,7 +226,8 @@ def calculate_raw_index(
     product_title: str,
     index: list,
     minio_folder_name: str = "indexes",
-    is_composite: bool = False
+    is_composite: bool = False,
+    quantize_rasters: bool = False
 ):
     """
     Example: python raw_index_calculation.py --uid dad7f379-de8c-49ec-b4cf-44348d0f418c --index ndvi --index ndsi --temp-dir ./data
@@ -291,7 +298,8 @@ def calculate_raw_index(
             bands_dict=indexes_bands[dict_key],
             product_title=product_title,
             minio_folder_name=minio_folder_name,
-            is_composite=is_composite
+            is_composite=is_composite,
+            quantize_rasters=quantize_rasters
         )
 
 

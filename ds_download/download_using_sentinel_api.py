@@ -112,7 +112,8 @@ def download_product_using_sentinel_api(
     from_date: datetime, 
     to_date: datetime, 
     geojson_path: str = None, 
-    tile_id: str = None
+    tile_id: str = None,
+    quantize_rasters: bool = False
 ) -> None:
     """
     Download Sentinel-2 products using the Copernicus Open Access Hub API.
@@ -155,6 +156,12 @@ def download_product_using_sentinel_api(
         product_metadata = dict_to_camel_case_and_str_to_date(product_metadata)
         product_title = product_metadata["name"].replace(".SAFE", "")
         tiles.add(product_title.split("_T")[1][0:5])
-        download_one_google_cloud(calculate_raw_indexes, calculate_intermediate_products, product_title, product_metadata)
+        download_one_google_cloud(
+            calculate_raw_indexes,
+            calculate_intermediate_products,
+            product_title,
+            product_metadata,
+            quantize_rasters=quantize_rasters,
+        )
 
     shutil.rmtree(tmp_dir)

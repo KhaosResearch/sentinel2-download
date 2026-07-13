@@ -1,16 +1,14 @@
+import argparse
 from datetime import datetime, timedelta
 from dask.distributed import Client
 from dotenv import load_dotenv
 from ds_download.download_using_sentinel_api import download_product_using_sentinel_api
-from ds_download.compute_composite import create_composite_by_tile_and_date
+from ds_download.compute_composite import create_composite_by_tile_and_date, get_season_date_ranges
 
 # Load environment variables
 load_dotenv(".env")
 
-# Set up the Dask distributed client with the scheduler address
-client = Client("<dask-scheduler-host>:<dask-scheduler-port>")
-
-def process_month(year: int, month: int, tile: str) -> str:
+def process_month(year: int, month: int, tile: str, quantize_rasters: bool = False) -> str:
     """
     Process a month's worth of Sentinel-2 data for a specific tile by downloading products 
     and creating a composite.
@@ -28,15 +26,47 @@ def process_month(year: int, month: int, tile: str) -> str:
         end_date = (init_date + timedelta(days=31)).replace(day=1)
         
         # Download Sentinel-2 products
-        download_product_using_sentinel_api(False, True, init_date, end_date, tile_id=tile)
+        download_product_using_sentinel_api(False, True, init_date, end_date, tile_id=tile, quantize_rasters=quantize_rasters)
         
         # Create a composite from the downloaded data
-        create_composite_by_tile_and_date(True, False, tile, init_date, end_date, 30)
+        create_composite_by_tile_and_date(True, False, tile, init_date, end_date, 30, quantize_rasters=quantize_rasters)
         
         return f"Processed {tile}, {year}-{month}"
 
     except Exception as e:
         return f"Error for {tile}, {year}-{month}: {str(e)}"
+
+
+def process_season(year: int, season_name: str, start_date: datetime, end_date: datetime, tile: str, cleanup_products: bool, quantize_rasters: bool = False) -> str:
+    """
+    Process a season's worth of Sentinel-2 data for a specific tile by downloading products
+    with per-product indexes and creating seasonal mean rasters.
+    """
+    try:
+        download_product_using_sentinel_api(True, True, start_date, end_date, tile_id=tile, quantize_rasters=quantize_rasters)
+
+        create_composite_by_tile_and_date(
+            calculate_raw_indexes=False,
+            calculate_intermediate_products=False,
+            tile=tile,
+            start_date=start_date,
+            end_date=end_date,
+            min_useful_data_percentage=30,
+            method="mean",
+            include_product_indexes=True,
+            period="seasonal",
+            period_label=season_name,
+            storage_year=year,
+            storage_period=season_name,
+            cleanup_products=cleanup_products,
+            quantize_rasters=quantize_rasters,
+        )
+
+        return f"Processed {tile}, {year}-{season_name}"
+
+    except Exception as e:
+        return f"Error for {tile}, {year}-{season_name}: {str(e)}"
+
 
 # Define the tiles to process
 tiles = [
@@ -64,17 +94,51 @@ tiles = [
 years = [2021]
 months = [4, 7, 11, 10, 3, 6]
 
-# Submit Dask tasks for processing the tiles and months
-for month in months:
-    futures = [
-        client.submit(process_month, year, month, tile)
-        for year in years
-        for tile in tiles
-    ]
-    
-    # Gather the results from all futures
-    results = client.gather(futures)
-    
-    # Print the results of the processing
-    for result in results:
-        print(result)
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--scheduler", default="<dask-scheduler-host>:<dask-scheduler-port>")
+    parser.add_argument("--composite-period", choices=["monthly", "seasonal"], default="monthly")
+    parser.add_argument("--keep-products", action="store_true", help="Do not delete product rasters after seasonal composites are uploaded.")
+    parser.add_argument("--quantize-rasters", action="store_true", help="Write generated bands and indexes as quantized compressed GeoTIFFs.")
+    args = parser.parse_args()
+
+    client = Client(args.scheduler)
+
+    if args.composite_period == "monthly":
+        for month in months:
+            futures = [
+                client.submit(process_month, year, month, tile, args.quantize_rasters)
+                for year in years
+                for tile in tiles
+            ]
+
+            results = client.gather(futures)
+
+            for result in results:
+                print(result)
+        return
+
+    for year in years:
+        for season_name, start_date, end_date in get_season_date_ranges(year):
+            futures = [
+                client.submit(
+                    process_season,
+                    year,
+                    season_name,
+                    start_date,
+                    end_date,
+                    tile,
+                    not args.keep_products,
+                    args.quantize_rasters,
+                )
+                for tile in tiles
+            ]
+
+            results = client.gather(futures)
+
+            for result in results:
+                print(result)
+
+
+if __name__ == "__main__":
+    main()
