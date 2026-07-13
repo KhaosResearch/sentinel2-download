@@ -107,6 +107,7 @@ def download_one_google_cloud(
     month = datetime.strptime(splits_check[2][4:6], "%m")
     minio_dir = join(tile_id, year, month.strftime("%B"), "products", "")
 
+    minio_found = False
     try:
         objects = minio_client.list_objects(minio_client.bucket_name, prefix=join(minio_dir, product_title), recursive=False)
         for _ in objects:
@@ -187,7 +188,10 @@ def download_one_google_cloud(
         metadata["noDataPercentage"] = calculate_no_data(unzip_folder)
         metadata["datetakeSensingTime"] = datetime.strptime(product_title.split("_")[2], "%Y%m%dT%H%M%S")
         metadata["tile"] = tile_id
-        mongo_col.insert_one(metadata)
+        if product_mongo_data:
+            mongo_col.update_one({"_id": product_mongo_data["_id"]}, {"$set": metadata})
+        else:
+            mongo_col.insert_one(metadata)
 
         # Clean up
         try:
