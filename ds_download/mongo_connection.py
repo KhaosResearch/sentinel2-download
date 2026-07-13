@@ -1,6 +1,8 @@
 import os
 from pymongo import MongoClient
 from pymongo.collection import Collection
+from dotenv import load_dotenv
+load_dotenv()
 
 class MongoConnection:
     """
@@ -28,14 +30,22 @@ class MongoConnection:
 
     def __init__(
         self, 
-        host: str = os.environ.get("MONGO_HOST"), 
-        port: str = os.environ.get("MONGO_PORT"),
-        username: str = os.environ.get("MONGO_USERNAME"),
-        password: str = os.environ.get("MONGO_PASSWORD"),
-        database: str = os.environ.get("MONGO_DATABASE_NAME"),
-        collection: str = os.environ.get("MONGO_COLLECTION_NAME"),
-        composite_collection: str = os.environ.get("MONGO_COMPOSITE_COLLECTION_NAME")
+        host: str = None, 
+        port: str = None,
+        username: str = None,
+        password: str = None,
+        database: str = None,
+        collection: str = None,
+        composite_collection: str = None
     ):
+        host = host or os.environ.get("MONGO_HOST")
+        port = port or os.environ.get("MONGO_PORT")
+        username = username or os.environ.get("MONGO_USERNAME")
+        password = password or os.environ.get("MONGO_PASSWORD")
+        database = database or os.environ.get("MONGO_DATABASE_NAME")
+        collection = collection or os.environ.get("MONGO_COLLECTION_NAME")
+        composite_collection = composite_collection or os.environ.get("MONGO_COMPOSITE_COLLECTION_NAME")
+
         self.mongo_client = MongoClient(
             host=f"mongodb://{host}:{port}/",
             username=username,

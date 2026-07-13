@@ -4,6 +4,7 @@ __pycache__/
 
 # Log files
 *.log
+nohup.out
 logs/
 
 # Environment variables
@@ -21,6 +22,7 @@ temp/
 *.tmp
 
 # MinIO, Mongo, and data processing-related directories
+data/
 ds_download.egg-info/
 dist/
 build/
@@ -32,7 +34,15 @@ build/
 
 # Exclude virtual environment folders
 venv/
+.venv/
 .env/
 
 # Jupyter Notebook checkpoints (if applicable)
 .ipynb_checkpoints/
+
+# Custom
+out/
+
+*.txt
+*.geojson
+*.tif

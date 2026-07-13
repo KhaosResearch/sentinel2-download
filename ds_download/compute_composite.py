@@ -12,12 +12,16 @@ import rasterio
 
 
 from os.path import join
+from minio.deleteobjects import DeleteObject
 
 from ds_download.minio_connection import MinioConnection
 from ds_download.mongo_connection import MongoConnection
 
-from ds_download.raw_index_calculation import calculate_raw_index
+from ds_download.raw_index_calculation import calculate_raw_index, compress_and_quantize_tiff
 from ds_download.band_arithmetic import _rescale_band
+
+import structlog
+logger = structlog.get_logger()
 
 def get_products_by_tile_and_date(tile, start_date, end_date, min_useful_data_percentage):
 
@@ -57,7 +61,7 @@ def get_products_by_tile_and_date(tile, start_date, end_date, min_useful_data_pe
     
     product_metadata_cursor = mongo_collection.aggregate(pipeline)
 
-    return product_metadata_cursor
+    return product_metadata_cursor, mongo_collection
 
 def _get_kwargs_raster(raster_path):
     """
@@ -201,7 +205,7 @@ def _composite(
             composite_kwargs["dtype"] = "float32"
             composite_kwargs["nodata"] = np.nan
             composite_kwargs["driver"] = "GTiff"
-        print(band_path)
+        logger.debug(f"BAND PATH: {band_path}")
         band = _read_raster(band_path)
 
         # Remove nodata pixels
@@ -286,8 +290,8 @@ def _create_composite(
     mongo_composites_collection = MongoConnection().get_composite_collection_object()
 
     products_titles = [product["title"] for product in products_metadata]
-    print(
-        "Creating composite of ", len(products_titles), " products: ", products_titles
+    logger.info(
+        f"Creating composite of {len(products_titles)} products: {products_titles}"
     )
 
     tmp_dir = os.environ.get("TMP_DIR")
@@ -299,7 +303,7 @@ def _create_composite(
     cloud_masks = {"10": [], "20": [], "60": []}
     scl_cloud_values = [3, 8, 9, 10]
 
-    print("Downloading and reading the cloud masks needed to make the composite")
+    logger.info("Downloading and reading the cloud masks needed to make the composite")
     for product_metadata in products_metadata:
         product_title = product_metadata["title"]
         products_titles.append(product_title)
@@ -365,7 +369,7 @@ def _create_composite(
         for band_filename, band_paths in composite_bands_dict.items():
 
             if len(band_paths) != len(products_titles):
-                print(
+                logger.warning(
                     f"Band {band_filename} is missing in some products, it will not be included in the composite"
                 )
                 continue
@@ -414,6 +418,8 @@ def _create_composite(
             ) as file_composite:
                 file_composite.write(composite_i_band)
 
+            compress_and_quantize_tiff(temp_path_composite_band)
+
             # Upload raster to minio
             band_filename = band_filename[:-3] + "tif"
             splits = composite_title.split("_T")
@@ -429,7 +435,7 @@ def _create_composite(
                 content_type="image/tif",
             )
             uploaded_composite_band_paths.append(minio_band_path)
-            print(
+            logger.info(
                 f"Uploaded raster: -> {temp_path_composite_band} into {bucket_name}:{minio_band_path}"
             )
 
@@ -448,10 +454,10 @@ def _create_composite(
 
         # Upload metadata to mongo
         result = mongo_composites_collection.insert_one(composite_metadata)
-        print("Inserted data in mongo, id: ", result.inserted_id)
+        logger.info(f"Inserted data in mongo, id: {result.inserted_id}")
 
     except (Exception, KeyboardInterrupt) as e:
-        print("Removing uncompleted composite from minio")
+        logger.warning("Removing uncompleted composite from minio")
         traceback.print_exc()
         for composite_band in uploaded_composite_band_paths:
             minio_client.remove_object(
@@ -467,7 +473,89 @@ def _create_composite(
         for composite_band in temp_paths_composite_bands + cloud_masks_temp_paths:
             Path.unlink(Path(composite_band))
 
-    return composite_metadata
+    return composite_metadata, minio_client
+
+def remove_product_from_minio(product_title: str, minio_client) -> None:
+    """
+    Removes all objects associated with a product from MinIO.
+    """
+    bucket_name = minio_client.bucket_name
+    
+    try:
+        # Expected format: S2A_MSIL2A_20240101T...
+        splits = product_title.split("_T")
+        tile_id = str(splits[1][0:5])      # e.g. 29SPC
+        
+        splits = product_title.split("_")
+        year = splits[2][0:4]              # e.g. 2024
+        # Parse month from "20240101T..."
+        month_name = datetime.strptime(splits[2][4:6], "%m").strftime("%B") 
+        
+        # HARDCODED PATH STRUCTURE based on your previous messages:
+        # tile/year/Month/products/product_title/
+        minio_prefix = f"{tile_id}/{year}/{month_name}/products/{product_title}/"
+        
+    except Exception as e:
+        logger.error(f"Failed to parse path for product {product_title}: {e}")
+        return
+
+    objects_to_delete = minio_client.list_objects(
+        bucket_name, prefix=minio_prefix, recursive=True
+    )
+
+    # Delete the objects
+    # Optimisation: We collect them into a list to check if we actually found anything
+    obj_list = list(objects_to_delete)
+    
+    if not obj_list:
+        logger.warning(f"MinIO Path {minio_prefix} was empty. Nothing to delete.")
+        return
+
+    # Delete loop
+    count = 0
+    for obj in obj_list:
+        try:
+            minio_client.remove_object(bucket_name, obj.object_name)
+            count += 1
+        except Exception as e:
+            logger.error(f"Error removing {obj.object_name}: {e}")
+
+    logger.info(f"Removed product {product_title} from MinIO ({count} files).")
+
+def remove_product_from_mongo(product_id, mongo_collection) -> None:
+    """
+    Removes the metadata record of a product from the MongoDB products collection.
+    """
+    try:
+        result = mongo_collection.delete_one({"_id": product_id})
+        
+        if result.deleted_count > 0:
+            logger.debug(f"Deleted product metadata {product_id} from Mongo.")
+        else:
+            logger.warning(f"Product {product_id} not found in Mongo during cleanup.")
+            
+    except Exception as e:
+        logger.error(f"Failed to delete product {product_id} from Mongo: {e}")
+
+def get_all_products_for_cleanup(tile, start_date, end_date, mongo_collection):
+    """
+    Fetches ALL products for a tile/date range, regardless of quality/clouds.
+    Used specifically for cleanup.
+    """
+    # Simple pipeline: Just match Tile and Date. No cloud filtering.
+    pipeline = [
+        {
+            "$match": {
+                "title": {"$regex": tile},
+                "datetakeSensingTime": {"$gte": start_date, "$lt": end_date}
+            }
+        },
+        {
+            "$project": {"title": 1, "_id": 1} # We only need Title (for MinIO) and ID (for Mongo)
+        }
+    ]
+    
+    return mongo_collection.aggregate(pipeline)
 
 def create_composite_by_tile_and_date(
     calculate_raw_indexes: bool,
@@ -475,12 +563,13 @@ def create_composite_by_tile_and_date(
     tile: str, 
     start_date: datetime, 
     end_date: datetime, 
-    min_useful_data_percentage: float
+    min_useful_data_percentage: float,
+    delete_products: bool = True
 ) -> None:
     """
     Create a composite by tile and date range.
     """
-    products_metadata_cursor = get_products_by_tile_and_date(
+    products_metadata_cursor, mongo_collection = get_products_by_tile_and_date(
         tile, start_date, end_date, min_useful_data_percentage
     )
 
@@ -493,25 +582,25 @@ def create_composite_by_tile_and_date(
                 products_metadata
             )
     if composite_metadata is None:
-        composite_metadata = _create_composite(products_metadata)
+        composite_metadata, minio_client = _create_composite(products_metadata)
         
         # Check if there was another composite for the same month and tile
         mongo_composite_col = MongoConnection().get_composite_collection_object()
         cursor = mongo_composite_col.find({"$and":[{"tile":tile}, {"title":{"$regex":f"{start_date.year}{start_date.month:02}"}}]})
         composites_for_month_and_tile = list(cursor)
         if len(composites_for_month_and_tile) > 1:
-            print("There is more than one composite for the same month and tile")
+            logger.warning("There is more than one composite for the same month and tile")
             for composite in composites_for_month_and_tile:
                 if composite["title"] != composite_metadata["title"]:
-                    print(f"Deleting composite {composite['title']}")
+                    logger.debug(f"Deleting composite {composite['title']}")
                     mongo_composite_col.delete_one({"_id":composite["_id"]})
     else:
-        print("The composite is already in mongo. Nothing to do")
+        logger.debug("The composite is already in mongo. Nothing to do")
 
     composite_title = composite_metadata["title"]
 
     if calculate_intermediate_products:
-        print("Calculating intermediate products for the composite")
+        logger.info("Calculating intermediate products for the composite")
         calculate_raw_index(
             product_title=composite_title,
             index=[
@@ -522,7 +611,7 @@ def create_composite_by_tile_and_date(
         )
 
     if calculate_raw_indexes:
-        print("Calculating raw indexes for the composite")
+        logger.info("Calculating raw indexes for the composite")
         calculate_raw_index(
             product_title=composite_title,
             index=[
@@ -537,11 +626,30 @@ def create_composite_by_tile_and_date(
                 "NDYI",
                 "MNDWI",
                 "BRI",
-                "TCI",
+                # "TCI",
                 "RI",
                 "BSI",
                 "CRI1"
             ],
             is_composite=True
         )
+
+    if delete_products:
+        logger.info("Cleaning up raw products and metadata used for this composite...")
+        
+        # 'products_metadata' contains the full documents returned by the aggregation pipeline
+        all_products = list(get_all_products_for_cleanup(tile, start_date, end_date, mongo_collection))
+        for product in all_products:
+            title = product.get("title")
+            p_id = product.get("_id")
+
+            # 1. Delete Files (MinIO)
+            remove_product_from_minio(title, minio_client) 
+
+            # 2. Delete Metadata (Mongo)
+            if p_id:
+                remove_product_from_mongo(p_id, mongo_collection)
+            else:
+                logger.warning(f"Could not delete metadata for {title}: No _id found.")
+            logger.info(f"Cleaned up product {title} from MinIO and Mongo.")
 

@@ -6,6 +6,7 @@ from pathlib import Path
 from datetime import datetime
 
 import numpy as np
+import rasterio
 from dotenv import load_dotenv
 from ds_download.band_arithmetic import (
     bri,
@@ -28,7 +29,12 @@ from ds_download.band_arithmetic import (
 from ds_download.minio_connection import MinioConnection
 from ds_download.mongo_connection import MongoConnection
 
+import structlog
+logger = structlog.get_logger()
+
 load_dotenv(".env")
+
+INT16_NODATA = -32768
 
 indexes_bands = dict(
     moisture={"b8a": "B8A_20m", "b11": "B11_20m"},
@@ -44,22 +50,98 @@ indexes_bands = dict(
     mndwi={"b3": "B03_20m", "b11": "B11_20m"},
     bri={"b3": "B03_10m", "b5": "B05_20m", "b8": "B08_10m"},
     bsi={"b2": "B02_10m", "b4": "B04_10m", "b8": "B08_10m", "b11": "B11_20m"},
-    tci={"b2": "B02_10m", "b3": "B03_10m", "b4": "B04_10m"},
+    # tci={"b2": "B02_10m", "b3": "B03_10m", "b4": "B04_10m"},
     ri={"b3": "B03_10m", "b4": "B04_10m"},
     cri1={"b2": "B02_10m", "b3": "B03_10m"},
 )
 
 
+def compress_and_quantize_tiff(
+        tif_path: str | Path,
+    ) -> Path:
+    """
+    Rewrite a TIFF as compressed Int16 before uploading it to MinIO.
+
+    Float rasters with values in [-1, 1] are scaled by 10000. Other numeric
+    rasters are rounded directly into Int16. NaN values are stored as nodata.
+    """
+    tif_path = Path(tif_path)
+    with rasterio.open(tif_path) as src:
+        data = src.read()
+        kwargs = src.meta.copy()
+        source_nodata = src.nodata
+
+    finite_mask = np.isfinite(data)
+    if source_nodata is not None and np.isfinite(source_nodata):
+        finite_mask &= data != source_nodata
+
+    scale = 1
+    if finite_mask.any():
+        finite_values = data[finite_mask]
+        has_fractional_values = np.any(~np.isclose(finite_values, np.rint(finite_values)))
+        should_scale_normalized_float = (
+            np.issubdtype(data.dtype, np.floating)
+            and finite_values.min() >= -1
+            and finite_values.max() <= 1
+            and has_fractional_values
+        )
+        if should_scale_normalized_float:
+            scale = 10000
+
+    scaled = np.rint(data * scale)
+
+    quantized = np.full(data.shape, INT16_NODATA, dtype=np.int16)
+    quantized[finite_mask] = np.clip(
+        scaled[finite_mask],
+        INT16_NODATA + 1,
+        np.iinfo(np.int16).max,
+    ).astype(np.int16)
+
+    kwargs.update(
+        driver="GTiff",
+        dtype=rasterio.int16,
+        nodata=INT16_NODATA,
+        compress="DEFLATE",
+        predictor=2,
+        zlevel=9,
+    )
+    with rasterio.open(tif_path, "w", **kwargs) as dst:
+        dst.write(quantized)
+
+    return tif_path
+
+
 def find_product_image(band_name: str, product_title: str) -> Path:
     """
     Finds image matching a pattern in the product folder with glob.
-    :param pattern: A pattern to match.
+    Prefers .tif (GeoJSON masked) over .jp2 (full tile).
+    
+    :param band_name: Band name to match (e.g., "B08_10m").
+    :param product_title: Product title for the folder.
     :return: A Path object pointing to the first found image.
     """
     product_folder = join(os.environ.get("TMP_DIR"), product_title)
-    return ([f for f in Path(product_folder).glob("*" + band_name + "*")])[0]
+    
+    # Try to find .tif first (GeoJSON mode)
+    tif_matches = [f for f in Path(product_folder).glob("*" + band_name + "*.tif")]
+    if tif_matches:
+        return tif_matches[0]
+    
+    # Fall back to .jp2 (tile mode)
+    jp2_matches = [f for f in Path(product_folder).glob("*" + band_name + "*.jp2")]
+    if jp2_matches:
+        return jp2_matches[0]
+    
+    raise FileNotFoundError(f"No band file found for {band_name} in {product_folder}")
 
-def get_index(index_name, bands_dict, product_title, minio_folder_name, is_composite):
+def get_index(
+        index_name: str,
+        bands_dict: dict,
+        product_title: str,
+        minio_folder_name: str,
+        is_composite: bool,
+        quantize: bool = True
+    ):
 
     band_extension = ".tif" if is_composite else ".jp2"
 
@@ -192,10 +274,13 @@ def get_index(index_name, bands_dict, product_title, minio_folder_name, is_compo
     tif_minio_path = join(minio_dir, product_title, minio_folder_name ,index_name + ".tif")
 
 
+    tif_path = indexes_folder + "/" + index_name + ".tif"
+    upload_path = compress_and_quantize_tiff(tif_path) if quantize else Path(tif_path)
+
     minio_client.fput_object(
         minio_bucket_name,
         tif_minio_path,
-        indexes_folder + "/" + index_name + ".tif",
+        upload_path,
         content_type="image/tif",
     )
 
@@ -220,7 +305,8 @@ def calculate_raw_index(
     product_title: str,
     index: list,
     minio_folder_name: str = "indexes",
-    is_composite: bool = False
+    is_composite: bool = False,
+    quantize: bool = True,
 ):
     """
     Example: python raw_index_calculation.py --uid dad7f379-de8c-49ec-b4cf-44348d0f418c --index ndvi --index ndsi --temp-dir ./data
@@ -267,23 +353,46 @@ def calculate_raw_index(
         index_name = idx.lower()
 
         if index_name in product_data[minio_folder_name]:
-            print("The index " + index_name + " is already calculated")
+            logger.warning("The index " + index_name + " is already calculated")
             continue
 
 
-        print("Calculating index " + index_name)
+        logger.info("Calculating index " + index_name)
 
         for v in indexes_bands[index_name].values():
 
-            band_file = v + band_extension
-            local_band_path = join(product_local_folder, band_file)
-
+            # Try .tif first (GeoJSON masked), then .jp2 (full tile)
+            local_band_path = join(product_local_folder, v + ".tif")
+            minio_band_file_tif = v + ".tif"
+            minio_band_file_jp2 = v + band_extension
+            
+            logger.debug(f"MINIO OBJECT (.tif): {join(bands_dir, minio_band_file_tif)}")
+            logger.debug(f"MINIO OBJECT (.jp2): {join(bands_dir, minio_band_file_jp2)}")
+            logger.debug(f"LOCAL OBJECT: {local_band_path}")
+            
             if not os.path.exists(local_band_path):
-                minio_client.fget_object(
-                    minio_bucket_name,
-                    join(bands_dir, band_file),
-                    local_band_path
-                )
+                # Try .tif first
+                try:
+                    minio_client.fget_object(
+                        minio_bucket_name,
+                        join(bands_dir, minio_band_file_tif),
+                        local_band_path
+                    )
+                    logger.debug(f"Downloaded .tif band: {minio_band_file_tif}")
+                except Exception:
+                    # Fall back to .jp2
+                    local_band_path_jp2 = join(product_local_folder, v + band_extension)
+                    try:
+                        minio_client.fget_object(
+                            minio_bucket_name,
+                            join(bands_dir, minio_band_file_jp2),
+                            local_band_path_jp2
+                        )
+                        local_band_path = local_band_path_jp2
+                        logger.debug(f"Downloaded .jp2 band: {minio_band_file_jp2}")
+                    except Exception as e:
+                        logger.error(f"Could not download band {v}: {e}")
+                        raise
 
         dict_key = index_name.replace("-", "")
         index_dicts[index_name] = get_index(
@@ -291,7 +400,8 @@ def calculate_raw_index(
             bands_dict=indexes_bands[dict_key],
             product_title=product_title,
             minio_folder_name=minio_folder_name,
-            is_composite=is_composite
+            is_composite=is_composite,
+            quantize=quantize
         )
 
 
@@ -308,4 +418,4 @@ def calculate_raw_index(
     try:
         shutil.rmtree(product_local_folder)
     except OSError as e:
-        print("Error: %s - %s." % (e.filename, e.strerror))
+        logger.exception("Error: %s - %s." % (e.filename, e.strerror))
