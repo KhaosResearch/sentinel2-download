@@ -83,6 +83,39 @@ create_composite_by_tile_and_date(
 )
 ```
 
+### Create Seasonal Mean Rasters
+
+Seasonal mode is opt-in. It creates four mean composites per tile/year:
+Winter, Spring, Summer, and Autumn. Product indexes are calculated first, then
+both bands and product index rasters are averaged pixel-wise into seasonal
+rasters. The same `MINIO_BUCKET_NAME` variable is used; point it at the bucket
+intended for seasonal outputs before running this mode.
+
+```bash
+python main_script.py --composite-period seasonal
+```
+
+Add `--quantize-rasters` to write generated bands and indexes as compressed
+integer GeoTIFFs. Bands are rounded to `uint16`; indexes are scaled by `0.0001`
+and stored as `int16`.
+
+```bash
+python main_script.py --composite-period seasonal --quantize-rasters
+```
+
+By default, seasonal mode deletes the source product rasters from MinIO after
+the seasonal outputs are uploaded successfully. Keep them for debugging with:
+
+```bash
+python main_script.py --composite-period seasonal --keep-products
+```
+
+The Dask script accepts the same period flag:
+
+```bash
+python main_script_dask.py --scheduler "<dask-scheduler-host>:<dask-scheduler-port>" --composite-period seasonal
+```
+
 ### Dask Integration for Distributed Processing
 
 ```python
@@ -145,4 +178,3 @@ kubectl get pods
 You should see pods for the Dask scheduler and multiple workers, indicating that the cluster is successfully deployed.
 
 Now, your Dask cluster is ready to work with the `ds_download` library for distributed processing of Sentinel-2 data.
-
