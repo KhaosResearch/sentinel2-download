@@ -1,7 +1,9 @@
+import json
 import os
 import re
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta
+from pathlib import Path
 
 import geojson
 import geomet.wkt
@@ -9,6 +11,73 @@ import requests
 from dateutil import parser as dparser
 
 from ds_download.download_from_google_cloud import download_one_google_cloud
+
+
+def _load_season_date_ranges(seasons_path: str) -> list:
+    with open(seasons_path) as f:
+        seasons = json.load(f)
+
+    return [
+        (
+            season_name,
+            datetime.strptime(season["start"], "%Y-%m-%d"),
+            datetime.strptime(season["end"], "%Y-%m-%d") + timedelta(days=1),
+        )
+        for season_name, season in seasons.items()
+    ]
+
+
+def _cleanup_tile_non_composites_from_minio(tile_id: str) -> None:
+    from ds_download.minio_connection import MinioConnection
+
+    minio_client = MinioConnection()
+    bucket_name = minio_client.bucket_name
+    objects = list(minio_client.list_objects(bucket_name, prefix=f"{tile_id}/", recursive=True))
+    deleted = 0
+    for obj in objects:
+        if "/composites/" in obj.object_name:
+            continue
+        minio_client.remove_object(bucket_name=bucket_name, object_name=obj.object_name)
+        deleted += 1
+    print(f"Deleted {deleted} non-composite objects from {bucket_name}:{tile_id}/")
+
+
+def _run_seasonal_pipeline_for_tile(
+    tile_id: str,
+    seasons_path: str,
+    min_useful_data_percentage: float,
+    cleanup_products: bool,
+    quantize_rasters: bool,
+) -> None:
+    from ds_download.compute_composite import create_composite_by_tile_and_date
+
+    for season_name, start_date, end_date in _load_season_date_ranges(seasons_path):
+        download_product_using_sentinel_api(
+            calculate_raw_indexes=True,
+            calculate_intermediate_products=True,
+            from_date=start_date,
+            to_date=end_date,
+            tile_id=tile_id,
+            quantize_rasters=quantize_rasters,
+        )
+        create_composite_by_tile_and_date(
+            calculate_raw_indexes=False,
+            calculate_intermediate_products=False,
+            tile=tile_id,
+            start_date=start_date,
+            end_date=end_date,
+            min_useful_data_percentage=min_useful_data_percentage,
+            method="median",
+            include_product_indexes=True,
+            period="seasonal",
+            period_label=season_name,
+            storage_year=start_date.year,
+            storage_period=season_name,
+            cleanup_products=cleanup_products,
+            quantize_rasters=quantize_rasters,
+        )
+        if cleanup_products:
+            _cleanup_tile_non_composites_from_minio(tile_id)
 
 
 def to_wkt(geojson_file: str, decimals: int = 4) -> str:
@@ -80,7 +149,7 @@ def find_products_sentinel_api_by_tile_id(tile_id: str, from_date: str, to_date:
         list: A list of Sentinel-2 products matching the search criteria.
     """
     response = requests.get(
-        f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name eq 'SENTINEL-2' and contains(Name,'MSIL2A') and contains(Name,'{tile_id}') and ContentDate/Start gt {from_date}T00:00:00.000Z and ContentDate/Start lt {to_date}T00:00:00.000Z&$top=1000"
+        f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name eq 'SENTINEL-2' and contains(Name,'MSIL2A') and contains(Name,'{tile_id}') and ContentDate/Start ge {from_date}T00:00:00.000Z and ContentDate/Start lt {to_date}T00:00:00.000Z&$top=1000"
     ).json()["value"]
     
     return response
@@ -100,7 +169,7 @@ def find_products_sentinel_api_by_geojson_file(geojson_path: str, from_date: str
     """
     footprint = to_wkt(geojson_path)
     response = requests.get(
-        f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name eq 'SENTINEL-2' and contains(Name,'MSIL2A') and OData.CSC.Intersects(area=geography'SRID=4326;{footprint}') and ContentDate/Start gt {from_date}T00:00:00.000Z and ContentDate/Start lt {to_date}T00:00:00.000Z&$top=1000"
+        f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name eq 'SENTINEL-2' and contains(Name,'MSIL2A') and OData.CSC.Intersects(area=geography'SRID=4326;{footprint}') and ContentDate/Start ge {from_date}T00:00:00.000Z and ContentDate/Start lt {to_date}T00:00:00.000Z&$top=1000"
     ).json()["value"]
     
     return response
@@ -109,11 +178,15 @@ def find_products_sentinel_api_by_geojson_file(geojson_path: str, from_date: str
 def download_product_using_sentinel_api(
     calculate_raw_indexes: bool, 
     calculate_intermediate_products: bool,
-    from_date: datetime, 
-    to_date: datetime, 
+    from_date: datetime = None,
+    to_date: datetime = None,
     geojson_path: str = None, 
     tile_id: str = None,
-    quantize_rasters: bool = False
+    quantize_rasters: bool = False,
+    run_seasonal_pipeline: bool = False,
+    seasons_path: str = "app_data/seasons.json",
+    min_useful_data_percentage: float = 30,
+    cleanup_products: bool = True,
 ) -> None:
     """
     Download Sentinel-2 products using the Copernicus Open Access Hub API.
@@ -125,10 +198,25 @@ def download_product_using_sentinel_api(
         to_date (datetime): End date for the search.
         geojson_path (str, optional): Path to the GeoJSON file for spatial search.
         tile_id (str, optional): Sentinel-2 tile ID for the search.
+        run_seasonal_pipeline (bool): Run the one-tile seasonal pipeline from seasons_path.
+        seasons_path (str): JSON file with season start/end dates.
+        cleanup_products (bool): Delete non-composite MinIO objects after each seasonal composite.
 
     Returns:
         None
     """
+    if run_seasonal_pipeline:
+        if not tile_id:
+            raise ValueError("tile_id is required when run_seasonal_pipeline is True.")
+        _run_seasonal_pipeline_for_tile(
+            tile_id,
+            seasons_path,
+            min_useful_data_percentage,
+            cleanup_products,
+            quantize_rasters,
+        )
+        return
+
     if not isinstance(from_date, datetime):
         raise ValueError("from_date must be a datetime object.")
     if not isinstance(to_date, datetime):
@@ -137,9 +225,8 @@ def download_product_using_sentinel_api(
     from_date = from_date.strftime("%Y-%m-%d")
     to_date = to_date.strftime("%Y-%m-%d")
     tiles = set()
-    tmp_dir = os.environ.get("TMP_DIR")
-    if not os.path.exists(tmp_dir):
-        os.mkdir(tmp_dir)
+    tmp_dir = Path(os.environ["TMP_DIR"])
+    tmp_dir.mkdir(parents=True, exist_ok=True)
 
     if tile_id:
         response = find_products_sentinel_api_by_tile_id(tile_id, from_date, to_date)
@@ -149,19 +236,20 @@ def download_product_using_sentinel_api(
         raise ValueError("You must provide either a GeoJSON file or a tile ID.")
 
     for product_metadata in response:
-        for key in product_metadata:
-            if "." in list(product_metadata.keys()):
+        for key in list(product_metadata):
+            if "." in key:
                 new_key = key.replace(".", "_")
                 product_metadata[new_key] = product_metadata.pop(key)
         product_metadata = dict_to_camel_case_and_str_to_date(product_metadata)
         product_title = product_metadata["name"].replace(".SAFE", "")
         tiles.add(product_title.split("_T")[1][0:5])
-        download_one_google_cloud(
-            calculate_raw_indexes,
-            calculate_intermediate_products,
-            product_title,
-            product_metadata,
-            quantize_rasters=quantize_rasters,
-        )
-
-    shutil.rmtree(tmp_dir)
+        try:
+            download_one_google_cloud(
+                calculate_raw_indexes,
+                calculate_intermediate_products,
+                product_title,
+                product_metadata,
+                quantize_rasters=quantize_rasters,
+            )
+        finally:
+            shutil.rmtree(tmp_dir / product_title, ignore_errors=True)
