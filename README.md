@@ -116,6 +116,20 @@ The Dask script accepts the same period flag:
 python main_script_dask.py --scheduler "<dask-scheduler-host>:<dask-scheduler-port>" --composite-period seasonal
 ```
 
+You can also run the one-tile seasonal pipeline directly from
+`download_product_using_sentinel_api`. This reads `app_data/seasons.json`,
+creates pixel-wise median seasonal composites for bands and product indexes,
+and deletes non-composite MinIO objects for that tile when cleanup is enabled:
+
+```python
+download_product_using_sentinel_api(
+    False,
+    False,
+    tile_id="31STF",
+    run_seasonal_pipeline=True,
+)
+```
+
 ### Dask Integration for Distributed Processing
 
 ```python
