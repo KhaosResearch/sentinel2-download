@@ -413,7 +413,7 @@ def _create_composite(
 
         rasters_to_compose = [("raw", bands_paths_products, True)]
         if include_indexes:
-            rasters_to_compose.append(("indexes", indexes_paths_products, False))
+            rasters_to_compose.append(("indexes", indexes_paths_products, True))
 
         for minio_folder_name, raster_paths_products, apply_cloud_masks in rasters_to_compose:
             composite_bands_dict = defaultdict(list)
@@ -639,6 +639,8 @@ def create_composite_by_tile_and_date(
                         mongo_composite_col.delete_one({"_id":composite["_id"]})
     else:
         print("The composite is already in mongo. Nothing to do")
+        if cleanup_products:
+            _cleanup_products_from_minio(products_metadata, MinioConnection())
 
     composite_title = composite_metadata["title"]
 
