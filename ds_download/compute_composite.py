@@ -285,6 +285,13 @@ def _get_product_prefix(product_title: str) -> str:
     return join(tile_id, year, month.strftime("%B"), "products", product_title, "")
 
 
+def _product_has_index_rasters(product_metadata: dict, minio_client: MinioConnection) -> bool:
+    indexes_prefix = join(_get_product_prefix(product_metadata["title"]), "indexes", "")
+    for _ in minio_client.list_objects(minio_client.bucket_name, prefix=indexes_prefix, recursive=True):
+        return True
+    return False
+
+
 def _cleanup_products_from_minio(products_metadata: Iterable[dict], minio_client: MinioConnection) -> None:
     bucket_name = minio_client.bucket_name
     mongo_collection = MongoConnection().get_collection_object()
@@ -606,8 +613,18 @@ def create_composite_by_tile_and_date(
     )
 
     max_products = int(os.environ.get("MAX_PRODUCTS_COMPOSITE"))
-    products_metadata = list(products_metadata_cursor)[:max_products]
+    products_metadata = list(products_metadata_cursor)
+    if include_product_indexes:
+        minio_client = MinioConnection()
+        products_metadata = [
+            product_metadata
+            for product_metadata in products_metadata
+            if _product_has_index_rasters(product_metadata, minio_client)
+        ]
+    products_metadata = products_metadata[:max_products]
     if not products_metadata:
+        if include_product_indexes:
+            raise ValueError(f"No products with index rasters found for tile {tile} between {start_date} and {end_date}")
         raise ValueError(f"No products found for tile {tile} between {start_date} and {end_date}")
     
     composite_metadata = _get_composite(
