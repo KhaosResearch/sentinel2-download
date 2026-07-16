@@ -1,4 +1,5 @@
 import argparse
+import logging
 import time
 from datetime import datetime, timedelta
 from ds_download.download_using_sentinel_api import download_product_using_sentinel_api
@@ -6,6 +7,10 @@ from ds_download.compute_composite import (
     create_composite_by_tile_and_date,
     get_season_date_ranges,
 )
+from ds_download.observability import configure_logging
+
+
+logger = logging.getLogger(__name__)
 
 # Define the path for the log file
 log_file_path = "execution_time_log.txt"
@@ -27,6 +32,16 @@ def log_time(file_path: str, year: int, period: str, tile: str, function_name: s
     """
     with open(file_path, 'a') as log_file:
         log_file.write(f"Year: {year}, Period: {period}, Tile: {tile}, Function: {function_name}, Time: {execution_time:.2f} seconds\n")
+    logger.info(
+        "pipeline step finished",
+        extra={
+            "pipeline.year": year,
+            "pipeline.period": period,
+            "s2.tile": tile,
+            "function.name": function_name,
+            "duration.seconds": round(execution_time, 2),
+        },
+    )
 
 def main_workflow(
     tiles: list,
@@ -70,7 +85,10 @@ def main_workflow(
                     error_message = f"Year: {year}, Month: {month}, Tile: {tile}, Error: {str(e)}"
                     with open(log_file_path, 'a') as log_file:
                         log_file.write(error_message + "\n")
-                    print(error_message)
+                    logger.exception(
+                        "monthly pipeline failed",
+                        extra={"pipeline.year": year, "pipeline.month": month, "s2.tile": tile},
+                    )
                     continue
         return
 
@@ -106,10 +124,14 @@ def main_workflow(
                 error_message = f"Year: {year}, Season: {season_name}, Tile: {tile}, Error: {str(e)}"
                 with open(log_file_path, 'a') as log_file:
                     log_file.write(error_message + "\n")
-                print(error_message)
+                logger.exception(
+                    "seasonal pipeline failed",
+                    extra={"pipeline.year": year, "pipeline.season": season_name, "s2.tile": tile},
+                )
                 continue
 
 if __name__ == "__main__":
+    configure_logging()
     parser = argparse.ArgumentParser()
     parser.add_argument("--composite-period", choices=["monthly", "seasonal"], default="monthly")
     parser.add_argument("--keep-products", action="store_true", help="Do not delete product rasters after seasonal composites are uploaded.")

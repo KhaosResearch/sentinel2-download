@@ -1,12 +1,16 @@
 import argparse
+import logging
 from datetime import datetime, timedelta
 from dask.distributed import Client
 from dotenv import load_dotenv
 from ds_download.download_using_sentinel_api import download_product_using_sentinel_api
 from ds_download.compute_composite import create_composite_by_tile_and_date, get_season_date_ranges
+from ds_download.observability import configure_logging
 
 # Load environment variables
 load_dotenv(".env")
+
+logger = logging.getLogger(__name__)
 
 def process_month(year: int, month: int, tile: str, quantize_rasters: bool = False) -> str:
     """
@@ -21,9 +25,14 @@ def process_month(year: int, month: int, tile: str, quantize_rasters: bool = Fal
     Returns:
         str: A message indicating the success or failure of the process.
     """
+    configure_logging()
     try:
         init_date = datetime(year, month, 1)
         end_date = (init_date + timedelta(days=31)).replace(day=1)
+        logger.info(
+            "dask monthly task started",
+            extra={"pipeline.year": year, "pipeline.month": month, "s2.tile": tile},
+        )
         
         # Download Sentinel-2 products
         download_product_using_sentinel_api(False, True, init_date, end_date, tile_id=tile, quantize_rasters=quantize_rasters)
@@ -31,9 +40,18 @@ def process_month(year: int, month: int, tile: str, quantize_rasters: bool = Fal
         # Create a composite from the downloaded data
         create_composite_by_tile_and_date(True, False, tile, init_date, end_date, 30, quantize_rasters=quantize_rasters)
         
-        return f"Processed {tile}, {year}-{month}"
+        message = f"Processed {tile}, {year}-{month}"
+        logger.info(
+            "dask monthly task finished",
+            extra={"pipeline.year": year, "pipeline.month": month, "s2.tile": tile},
+        )
+        return message
 
     except Exception as e:
+        logger.exception(
+            "dask monthly task failed",
+            extra={"pipeline.year": year, "pipeline.month": month, "s2.tile": tile},
+        )
         return f"Error for {tile}, {year}-{month}: {str(e)}"
 
 
@@ -42,7 +60,12 @@ def process_season(year: int, season_name: str, start_date: datetime, end_date: 
     Process a season's worth of Sentinel-2 data for a specific tile by downloading products
     with per-product indexes and creating seasonal mean rasters.
     """
+    configure_logging()
     try:
+        logger.info(
+            "dask seasonal task started",
+            extra={"pipeline.year": year, "pipeline.season": season_name, "s2.tile": tile},
+        )
         download_product_using_sentinel_api(True, True, start_date, end_date, tile_id=tile, quantize_rasters=quantize_rasters)
 
         create_composite_by_tile_and_date(
@@ -62,9 +85,18 @@ def process_season(year: int, season_name: str, start_date: datetime, end_date: 
             quantize_rasters=quantize_rasters,
         )
 
-        return f"Processed {tile}, {year}-{season_name}"
+        message = f"Processed {tile}, {year}-{season_name}"
+        logger.info(
+            "dask seasonal task finished",
+            extra={"pipeline.year": year, "pipeline.season": season_name, "s2.tile": tile},
+        )
+        return message
 
     except Exception as e:
+        logger.exception(
+            "dask seasonal task failed",
+            extra={"pipeline.year": year, "pipeline.season": season_name, "s2.tile": tile},
+        )
         return f"Error for {tile}, {year}-{season_name}: {str(e)}"
 
 
@@ -96,6 +128,7 @@ years = [2021]
 months = [4, 7, 11, 10, 3, 6]
 
 def main() -> None:
+    configure_logging()
     parser = argparse.ArgumentParser()
     parser.add_argument("--scheduler", default="<dask-scheduler-host>:<dask-scheduler-port>")
     parser.add_argument("--composite-period", choices=["monthly", "seasonal"], default="monthly")
@@ -104,6 +137,10 @@ def main() -> None:
     args = parser.parse_args()
 
     client = Client(args.scheduler)
+    logger.info(
+        "dask pipeline started",
+        extra={"dask.scheduler": args.scheduler, "pipeline.period": args.composite_period},
+    )
 
     if args.composite_period == "monthly":
         for month in months:
@@ -116,7 +153,7 @@ def main() -> None:
             results = client.gather(futures)
 
             for result in results:
-                print(result)
+                logger.info("dask task result", extra={"task.result": result})
         return
 
     for year in years:
@@ -138,7 +175,7 @@ def main() -> None:
             results = client.gather(futures)
 
             for result in results:
-                print(result)
+                logger.info("dask task result", extra={"task.result": result})
 
 
 if __name__ == "__main__":
