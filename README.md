@@ -116,6 +116,19 @@ The Dask script accepts the same period flag:
 python main_script_dask.py --scheduler "<dask-scheduler-host>:<dask-scheduler-port>" --composite-period seasonal
 ```
 
+### OpenTelemetry Logs
+
+Pipeline scripts emit standard Python log records and can export them through
+OpenTelemetry OTLP when a collector endpoint is configured:
+
+```bash
+LOG_LEVEL=DEBUG
+OTEL_LOGS_EXPORTER=otlp
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+```
+
+Leave `OTEL_LOGS_EXPORTER=none` for local console-only logs.
+
 You can also run the one-tile seasonal pipeline directly from
 `download_product_using_sentinel_api`. This reads `app_data/seasons.json`,
 creates pixel-wise median seasonal composites for bands and product indexes,
