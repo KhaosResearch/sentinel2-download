@@ -36,3 +36,4 @@ venv/
 
 # Jupyter Notebook checkpoints (if applicable)
 .ipynb_checkpoints/
+app_data/
