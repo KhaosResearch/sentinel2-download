@@ -1,6 +1,26 @@
 import os
+from urllib.parse import quote_plus
+
+from dotenv import load_dotenv
 from pymongo import MongoClient
 from pymongo.collection import Collection
+
+
+def _build_mongo_uri(host: str, port: str, username: str, password: str) -> str:
+    if not host:
+        raise ValueError("MONGO_HOST is not configured")
+
+    if host.startswith(("mongodb://", "mongodb+srv://")):
+        return host
+
+    if not port:
+        raise ValueError("MONGO_PORT is not configured")
+
+    credentials = ""
+    if username and password:
+        credentials = f"{quote_plus(username)}:{quote_plus(password)}@"
+
+    return f"mongodb://{credentials}{host}:{port}/"
 
 class MongoConnection:
     """
@@ -28,19 +48,24 @@ class MongoConnection:
 
     def __init__(
         self, 
-        host: str = os.environ.get("MONGO_HOST"), 
-        port: str = os.environ.get("MONGO_PORT"),
-        username: str = os.environ.get("MONGO_USERNAME"),
-        password: str = os.environ.get("MONGO_PASSWORD"),
-        database: str = os.environ.get("MONGO_DATABASE_NAME"),
-        collection: str = os.environ.get("MONGO_COLLECTION_NAME"),
-        composite_collection: str = os.environ.get("MONGO_COMPOSITE_COLLECTION_NAME")
+        host: str = None,
+        port: str = None,
+        username: str = None,
+        password: str = None,
+        database: str = None,
+        collection: str = None,
+        composite_collection: str = None,
     ):
-        self.mongo_client = MongoClient(
-            host=f"mongodb://{host}:{port}/",
-            username=username,
-            password=password
-        )
+        load_dotenv(".env")
+        host = host or os.environ.get("MONGO_HOST")
+        port = port or os.environ.get("MONGO_PORT")
+        username = username or os.environ.get("MONGO_USERNAME")
+        password = password or os.environ.get("MONGO_PASSWORD")
+        database = database or os.environ.get("MONGO_DATABASE_NAME")
+        collection = collection or os.environ.get("MONGO_COLLECTION_NAME")
+        composite_collection = composite_collection or os.environ.get("MONGO_COMPOSITE_COLLECTION_NAME")
+
+        self.mongo_client = MongoClient(_build_mongo_uri(host, port, username, password))
         self.db = database
         self.collection = collection
         self.composite_collection = composite_collection

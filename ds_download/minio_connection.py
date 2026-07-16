@@ -1,4 +1,5 @@
 import os
+from dotenv import load_dotenv
 from minio import Minio
 
 class MinioConnection(Minio):
@@ -22,12 +23,19 @@ class MinioConnection(Minio):
     
     def __init__(
         self, 
-        host: str = os.environ.get("MINIO_HOST"),
-        port: str = os.environ.get("MINIO_PORT"),
-        access_key: str = os.environ.get("MINIO_ACCESS_KEY"),
-        secret_key: str = os.environ.get("MINIO_SECRET_KEY"),
-        bucket_name: str = os.environ.get("MINIO_BUCKET_NAME")
+        host: str = None,
+        port: str = None,
+        access_key: str = None,
+        secret_key: str = None,
+        bucket_name: str = None,
     ):
+        load_dotenv(".env")
+        host = host or os.environ.get("MINIO_HOST")
+        port = port or os.environ.get("MINIO_PORT")
+        access_key = access_key or os.environ.get("MINIO_ACCESS_KEY")
+        secret_key = secret_key or os.environ.get("MINIO_SECRET_KEY")
+        bucket_name = bucket_name or os.environ.get("MINIO_BUCKET_NAME")
+
         super().__init__(
             endpoint=f"{host}:{port}",
             access_key=access_key,
