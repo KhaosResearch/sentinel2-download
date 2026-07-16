@@ -1,5 +1,5 @@
+import logging
 import os
-import traceback
 from collections import defaultdict
 from datetime import datetime
 from hashlib import sha256
@@ -15,10 +15,13 @@ from os.path import join
 
 from ds_download.minio_connection import MinioConnection
 from ds_download.mongo_connection import MongoConnection
+from ds_download.observability import configure_logging
 
 from ds_download.raw_index_calculation import calculate_raw_index
 from ds_download.band_arithmetic import _rescale_band
 from ds_download.raster_encoding import encode_geotiff
+
+logger = logging.getLogger(__name__)
 
 def get_products_by_tile_and_date(tile, start_date, end_date, min_useful_data_percentage):
 
@@ -205,7 +208,7 @@ def _composite(
             composite_kwargs["dtype"] = "float32"
             composite_kwargs["nodata"] = np.nan
             composite_kwargs["driver"] = "GTiff"
-        print(band_path)
+        logger.debug("reading raster for composite", extra={"raster.path": band_path})
         band = _read_raster(band_path)
 
         # Remove nodata pixels
@@ -305,7 +308,15 @@ def _cleanup_products_from_minio(products_metadata: Iterable[dict], minio_client
             {"title": product_title},
             {"$unset": {"indexes": "", "intermediateProducts": ""}},
         )
-        print(f"Deleted {len(objects)} product objects from {bucket_name}:{prefix}")
+        logger.info(
+            "deleted product objects after composite",
+            extra={
+                "s2.product": product_title,
+                "minio.bucket": bucket_name,
+                "minio.prefix": prefix,
+                "object.count": len(objects),
+            },
+        )
 
 
 def _create_composite(
@@ -332,8 +343,9 @@ def _create_composite(
     mongo_composites_collection = MongoConnection().get_composite_collection_object()
 
     products_titles = [product["title"] for product in products_metadata]
-    print(
-        "Creating composite of ", len(products_titles), " products: ", products_titles
+    logger.info(
+        "composite creation started",
+        extra={"product.count": len(products_titles), "s2.products": products_titles},
     )
 
     tmp_dir = os.environ.get("TMP_DIR")
@@ -347,7 +359,10 @@ def _create_composite(
     cloud_masks = {"10": [], "20": [], "60": []}
     scl_cloud_values = [3, 8, 9, 10]
 
-    print("Downloading and reading the cloud masks needed to make the composite")
+    logger.info(
+        "composite cloud mask download started",
+        extra={"product.count": len(products_titles)},
+    )
     for product_metadata in products_metadata:
         product_title = product_metadata["title"]
         products_titles.append(product_title)
@@ -435,8 +450,13 @@ def _create_composite(
             for band_filename, band_paths in composite_bands_dict.items():
 
                 if len(band_paths) != len(products_titles):
-                    print(
-                        f"Raster {band_filename} is missing in some products, it will not be included in the composite"
+                    logger.warning(
+                        "raster missing in some products; skipping composite raster",
+                        extra={
+                            "raster.name": band_filename,
+                            "expected.product_count": len(products_titles),
+                            "actual.product_count": len(band_paths),
+                        },
                     )
                     continue
 
@@ -529,8 +549,15 @@ def _create_composite(
                         uploaded_composite_indexes[index_name]["encoding"] = encoding
                 else:
                     uploaded_composite_band_paths.append(minio_band_path)
-                print(
-                    f"Uploaded raster: -> {temp_path_composite_band} into {bucket_name}:{minio_band_path}"
+                logger.info(
+                    "composite raster uploaded",
+                    extra={
+                        "s2.composite": composite_title,
+                        "raster.name": band_filename,
+                        "local.path": str(temp_path_composite_band),
+                        "minio.bucket": bucket_name,
+                        "minio.key": minio_band_path,
+                    },
                 )
 
         composite_metadata = dict()
@@ -563,14 +590,19 @@ def _create_composite(
 
         # Upload metadata to mongo
         result = mongo_composites_collection.insert_one(composite_metadata)
-        print("Inserted data in mongo, id: ", result.inserted_id)
+        logger.info(
+            "composite metadata inserted in mongo",
+            extra={"s2.composite": composite_title, "mongo.id": str(result.inserted_id)},
+        )
 
         if cleanup_products:
             _cleanup_products_from_minio(products_metadata, minio_client)
 
     except (Exception, KeyboardInterrupt) as e:
-        print("Removing uncompleted composite from minio")
-        traceback.print_exc()
+        logger.exception(
+            "composite creation failed; removing uncompleted composite from minio",
+            extra={"s2.composite": _get_title_composite(products_titles) if products_titles else None},
+        )
         for composite_band in uploaded_composite_band_paths + uploaded_composite_index_paths:
             minio_client.remove_object(
                 bucket_name=bucket_name, object_name=composite_band
@@ -608,6 +640,16 @@ def create_composite_by_tile_and_date(
     """
     Create a composite by tile and date range.
     """
+    configure_logging()
+    logger.info(
+        "composite lookup started",
+        extra={
+            "s2.tile": tile,
+            "pipeline.start_date": start_date.isoformat(),
+            "pipeline.end_date": end_date.isoformat(),
+            "pipeline.period": period,
+        },
+    )
     products_metadata_cursor = get_products_by_tile_and_date(
         tile, start_date, end_date, min_useful_data_percentage
     )
@@ -622,6 +664,15 @@ def create_composite_by_tile_and_date(
             if _product_has_index_rasters(product_metadata, minio_client)
         ]
     products_metadata = products_metadata[:max_products]
+    logger.info(
+        "composite products selected",
+        extra={
+            "s2.tile": tile,
+            "product.count": len(products_metadata),
+            "max.product_count": max_products,
+            "include.product_indexes": include_product_indexes,
+        },
+    )
     if not products_metadata:
         if include_product_indexes:
             raise ValueError(f"No products with index rasters found for tile {tile} between {start_date} and {end_date}")
@@ -649,20 +700,32 @@ def create_composite_by_tile_and_date(
             cursor = mongo_composite_col.find({"$and":[{"tile":tile}, {"title":{"$regex":f"{start_date.year}{start_date.month:02}"}}]})
             composites_for_month_and_tile = list(cursor)
             if len(composites_for_month_and_tile) > 1:
-                print("There is more than one composite for the same month and tile")
+                logger.warning(
+                    "more than one composite found for same month and tile",
+                    extra={"s2.tile": tile, "composite.count": len(composites_for_month_and_tile)},
+                )
                 for composite in composites_for_month_and_tile:
                     if composite["title"] != composite_metadata["title"]:
-                        print(f"Deleting composite {composite['title']}")
+                        logger.warning(
+                            "deleting duplicate composite metadata",
+                            extra={"s2.composite": composite["title"]},
+                        )
                         mongo_composite_col.delete_one({"_id":composite["_id"]})
     else:
-        print("The composite is already in mongo. Nothing to do")
+        logger.info(
+            "composite already exists in mongo",
+            extra={"s2.composite": composite_metadata["title"], "s2.tile": tile},
+        )
         if cleanup_products:
             _cleanup_products_from_minio(products_metadata, MinioConnection())
 
     composite_title = composite_metadata["title"]
 
     if calculate_intermediate_products:
-        print("Calculating intermediate products for the composite")
+        logger.info(
+            "composite intermediate product calculation started",
+            extra={"s2.composite": composite_title, "s2.tile": tile},
+        )
         calculate_raw_index(
             product_title=composite_title,
             index=[
@@ -674,7 +737,10 @@ def create_composite_by_tile_and_date(
         )
 
     if calculate_raw_indexes:
-        print("Calculating raw indexes for the composite")
+        logger.info(
+            "composite raw index calculation started",
+            extra={"s2.composite": composite_title, "s2.tile": tile},
+        )
         calculate_raw_index(
             product_title=composite_title,
             index=[

@@ -1,3 +1,4 @@
+import logging
 import os
 from os.path import join
 import shutil
@@ -27,9 +28,12 @@ from ds_download.band_arithmetic import (
 )
 from ds_download.minio_connection import MinioConnection
 from ds_download.mongo_connection import MongoConnection
+from ds_download.observability import configure_logging
 from ds_download.raster_encoding import encode_geotiff
 
 load_dotenv(".env")
+
+logger = logging.getLogger(__name__)
 
 indexes_bands = dict(
     moisture={"b8a": "B8A_20m", "b11": "B11_20m"},
@@ -202,6 +206,15 @@ def get_index(index_name, bands_dict, product_title, minio_folder_name, is_compo
         upload_path,
         content_type="image/tif",
     )
+    logger.info(
+        "index raster uploaded",
+        extra={
+            "s2.product": product_title,
+            "index.name": index_name,
+            "minio.bucket": minio_bucket_name,
+            "minio.key": tif_minio_path,
+        },
+    )
 
     band = dict()
     for k, v in bands_dict.items():
@@ -232,6 +245,16 @@ def calculate_raw_index(
     """
     Example: python raw_index_calculation.py --uid dad7f379-de8c-49ec-b4cf-44348d0f418c --index ndvi --index ndsi --temp-dir ./data
     """
+    configure_logging()
+    logger.info(
+        "raw index calculation requested",
+        extra={
+            "s2.product": product_title,
+            "index.names": [idx.lower() for idx in index],
+            "minio.folder": minio_folder_name,
+            "is.composite": is_composite,
+        },
+    )
     
     # Connect with mongo
     if is_composite:
@@ -274,11 +297,17 @@ def calculate_raw_index(
         index_name = idx.lower()
 
         if index_name in product_data[minio_folder_name]:
-            print("The index " + index_name + " is already calculated")
+            logger.info(
+                "index already calculated",
+                extra={"s2.product": product_title, "index.name": index_name},
+            )
             continue
 
 
-        print("Calculating index " + index_name)
+        logger.info(
+            "index calculation started",
+            extra={"s2.product": product_title, "index.name": index_name},
+        )
 
         for v in indexes_bands[index_name].values():
 
@@ -311,9 +340,20 @@ def calculate_raw_index(
         {"title": product_title},
         {"$set": {minio_folder_name: index_dicts}}
     )
+    logger.info(
+        "index metadata updated in mongo",
+        extra={
+            "s2.product": product_title,
+            "index.count": len(index_dicts),
+            "minio.folder": minio_folder_name,
+        },
+    )
 
     # Remove product from local folder
     try:
         shutil.rmtree(product_local_folder)
     except OSError as e:
-        print("Error: %s - %s." % (e.filename, e.strerror))
+        logger.warning(
+            "failed to remove local product folder",
+            extra={"s2.product": product_title, "local.path": e.filename, "error": e.strerror},
+        )
