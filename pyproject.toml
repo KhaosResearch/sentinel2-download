@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ds-download"
+version = "0.1.4"
+description = "A package for downloading and processing Sentinel-2 data"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Khaos Research" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "dask[distributed]>=2024.8",
+    "geojson>=2.5,<4",
+    "geomet>=1.1,<2",
+    "google-cloud-storage>=3,<4",
+    "minio>=7.2,<8",
+    "numpy>=1.26",
+    "pymongo>=4.8,<5",
+    "python-dateutil>=2.9,<3",
+    "python-dotenv>=1,<2",
+    "rasterio>=1.3.11,<2",
+    "requests>=2.32,<3",
+]
+
+[project.urls]
+Homepage = "https://github.com/KhaosResearch/sentinel2-download"
+
+[tool.setuptools.packages.find]
+include = ["ds_download*"]
