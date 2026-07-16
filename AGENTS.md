@@ -9,7 +9,7 @@ monthly composites locally or through Dask.
 ## Tech Stack
 
 - Python 3.10+
-- Packaging: `setuptools` in `setup.py`
+- Packaging: `setuptools` via `pyproject.toml`
 - Data/geospatial: `rasterio`, `numpy`, `geojson`, `geomet`
 - External services: Google Cloud Storage, MinIO, MongoDB, Copernicus Data Space
 - Distributed execution: `dask.distributed`
@@ -17,8 +17,8 @@ monthly composites locally or through Dask.
 
 ## Commands
 
-- Install runtime deps: `pip install -r requirements.txt`
-- Install local package: `pip install -e .`
+- Install runtime deps and local package: `uv sync`
+- Install local package with pip: `pip install -e .`
 - Build package: `make build`
 - Release package: `make release`
 - Run local workflow: `python main_script.py`

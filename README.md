@@ -24,18 +24,18 @@
    cd ds_download
    ```
 
-2. Since the library is not available on PyPI, you will need to install it locally. Install the package using `pip`:
+2. Install dependencies and the local package with `uv`:
 
    ```bash
-   pip install .
+   uv sync
    ```
 
 3. Set up your environment variables in a `.env` file:
 
-4. Install the required dependencies:
+4. For pip-based environments, install the local package directly:
 
    ```bash
-   pip install -r requirements.txt
+   pip install .
    ```
 
 ## Usage
