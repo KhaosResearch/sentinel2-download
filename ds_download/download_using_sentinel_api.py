@@ -57,48 +57,55 @@ def _run_seasonal_pipeline_for_tile(
     cleanup_products: bool,
     quantize_rasters: bool,
 ) -> None:
-    from ds_download.compute_composite import create_composite_by_tile_and_date
+    from ds_download.compute_composite import create_composite_by_tile_and_date, seasonal_composite_exists
 
     for season_name, start_date, end_date in _load_season_date_ranges(seasons_path):
-        logger.info(
-            "seasonal pipeline started",
-            extra={
-                "s2.tile": tile_id,
-                "pipeline.season": season_name,
-                "pipeline.start_date": start_date.isoformat(),
-                "pipeline.end_date": end_date.isoformat(),
-            },
-        )
-        download_product_using_sentinel_api(
-            calculate_raw_indexes=True,
-            calculate_intermediate_products=True,
-            from_date=start_date,
-            to_date=end_date,
-            tile_id=tile_id,
-            quantize_rasters=quantize_rasters,
-        )
-        create_composite_by_tile_and_date(
-            calculate_raw_indexes=False,
-            calculate_intermediate_products=False,
-            tile=tile_id,
-            start_date=start_date,
-            end_date=end_date,
-            min_useful_data_percentage=min_useful_data_percentage,
-            method="median",
-            include_product_indexes=True,
-            period="seasonal",
-            period_label=season_name,
-            storage_year=start_date.year,
-            storage_period=season_name,
-            cleanup_products=cleanup_products,
-            quantize_rasters=quantize_rasters,
-        )
-        if cleanup_products:
-            _cleanup_tile_non_composites_from_minio(tile_id)
-        logger.info(
-            "seasonal pipeline finished",
-            extra={"s2.tile": tile_id, "pipeline.season": season_name},
-        )
+        season_context = {
+            "s2.tile": tile_id,
+            "pipeline.season": season_name,
+            "pipeline.start_date": start_date.isoformat(),
+            "pipeline.end_date": end_date.isoformat(),
+        }
+        try:
+            if seasonal_composite_exists(tile_id, start_date.year, season_name):
+                logger.info("seasonal composite already exists; skipping pipeline", extra=season_context)
+                continue
+
+            logger.info("seasonal pipeline started", extra=season_context)
+            download_product_using_sentinel_api(
+                calculate_raw_indexes=True,
+                calculate_intermediate_products=True,
+                from_date=start_date,
+                to_date=end_date,
+                tile_id=tile_id,
+                quantize_rasters=quantize_rasters,
+                season_name=season_name,
+            )
+            create_composite_by_tile_and_date(
+                calculate_raw_indexes=False,
+                calculate_intermediate_products=False,
+                tile=tile_id,
+                start_date=start_date,
+                end_date=end_date,
+                min_useful_data_percentage=min_useful_data_percentage,
+                method="median",
+                include_product_indexes=True,
+                period="seasonal",
+                period_label=season_name,
+                storage_year=start_date.year,
+                storage_period=season_name,
+                cleanup_products=cleanup_products,
+                quantize_rasters=quantize_rasters,
+            )
+            if cleanup_products:
+                _cleanup_tile_non_composites_from_minio(tile_id)
+            logger.info(
+                "seasonal pipeline finished",
+                extra={"s2.tile": tile_id, "pipeline.season": season_name},
+            )
+        except Exception:
+            logger.exception("seasonal pipeline failed", extra=season_context)
+            raise
 
 
 def to_wkt(geojson_file: str, decimals: int = 4) -> str:
@@ -206,6 +213,7 @@ def download_product_using_sentinel_api(
     quantize_rasters: bool = False,
     run_seasonal_pipeline: bool = False,
     seasons_path: str = "app_data/seasons.json",
+    season_name: str = None,
     min_useful_data_percentage: float = 30,
     cleanup_products: bool = True,
 ) -> None:
@@ -221,6 +229,7 @@ def download_product_using_sentinel_api(
         tile_id (str, optional): Sentinel-2 tile ID for the search.
         run_seasonal_pipeline (bool): Run the one-tile seasonal pipeline from seasons_path.
         seasons_path (str): JSON file with season start/end dates.
+        season_name (str): Season label to include in logs.
         cleanup_products (bool): Delete non-composite MinIO objects after each seasonal composite.
 
     Returns:
@@ -249,6 +258,9 @@ def download_product_using_sentinel_api(
     tiles = set()
     tmp_dir = Path(os.environ["TMP_DIR"])
     tmp_dir.mkdir(parents=True, exist_ok=True)
+    log_context = {}
+    if season_name:
+        log_context["pipeline.season"] = season_name
 
     if tile_id:
         logger.info(
@@ -257,6 +269,7 @@ def download_product_using_sentinel_api(
                 "s2.tile": tile_id,
                 "pipeline.from_date": from_date,
                 "pipeline.to_date": to_date,
+                **log_context,
             },
         )
         response = find_products_sentinel_api_by_tile_id(tile_id, from_date, to_date)
@@ -267,6 +280,7 @@ def download_product_using_sentinel_api(
                 "geojson.path": geojson_path,
                 "pipeline.from_date": from_date,
                 "pipeline.to_date": to_date,
+                **log_context,
             },
         )
         response = find_products_sentinel_api_by_geojson_file(geojson_path, from_date, to_date)
@@ -279,6 +293,7 @@ def download_product_using_sentinel_api(
             "s2.tile": tile_id,
             "geojson.path": geojson_path,
             "product.count": len(response),
+            **log_context,
         },
     )
 
@@ -293,7 +308,11 @@ def download_product_using_sentinel_api(
         try:
             logger.info(
                 "product download started",
-                extra={"s2.product": product_title, "s2.tile": product_title.split("_T")[1][0:5]},
+                extra={
+                    "s2.product": product_title,
+                    "s2.tile": product_title.split("_T")[1][0:5],
+                    **log_context,
+                },
             )
             download_one_google_cloud(
                 calculate_raw_indexes,
@@ -301,15 +320,24 @@ def download_product_using_sentinel_api(
                 product_title,
                 product_metadata,
                 quantize_rasters=quantize_rasters,
+                season_name=season_name,
             )
             logger.info(
                 "product download finished",
-                extra={"s2.product": product_title, "s2.tile": product_title.split("_T")[1][0:5]},
+                extra={
+                    "s2.product": product_title,
+                    "s2.tile": product_title.split("_T")[1][0:5],
+                    **log_context,
+                },
             )
         except Exception:
             logger.exception(
                 "product download failed",
-                extra={"s2.product": product_title, "s2.tile": product_title.split("_T")[1][0:5]},
+                extra={
+                    "s2.product": product_title,
+                    "s2.tile": product_title.split("_T")[1][0:5],
+                    **log_context,
+                },
             )
             raise
         finally:

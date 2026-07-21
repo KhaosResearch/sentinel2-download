@@ -1,9 +1,32 @@
+import faulthandler
+import json
 import logging
 import os
 import sys
 
 
 _LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
+_RESERVED_LOG_RECORD_ATTRS = set(
+    logging.LogRecord("", 0, "", 0, "", (), None).__dict__
+) | {"asctime", "message"}
+
+
+class _ExtraFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        message = super().format(record)
+        fields = {
+            key: value
+            for key, value in record.__dict__.items()
+            if key not in _RESERVED_LOG_RECORD_ATTRS and not key.startswith("_")
+        }
+        if not fields:
+            return message
+
+        extras = " ".join(
+            f"{key}={json.dumps(value, default=str)}"
+            for key, value in sorted(fields.items())
+        )
+        return f"{message} {extras}"
 
 
 def _log_level(level_name: str) -> int:
@@ -48,6 +71,8 @@ def configure_logging(service_name: str = "sentinel2-download") -> None:
     if configure_logging._configured:
         return
 
+    faulthandler.enable(all_threads=True)
+
     level = _log_level(os.environ.get("LOG_LEVEL", "INFO"))
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
@@ -55,7 +80,7 @@ def configure_logging(service_name: str = "sentinel2-download") -> None:
     if not any(getattr(handler, "_ds_download_console", False) for handler in root_logger.handlers):
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(level)
-        console_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+        console_handler.setFormatter(_ExtraFormatter(_LOG_FORMAT))
         console_handler._ds_download_console = True
         root_logger.addHandler(console_handler)
 

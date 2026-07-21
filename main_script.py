@@ -6,6 +6,7 @@ from ds_download.download_using_sentinel_api import download_product_using_senti
 from ds_download.compute_composite import (
     create_composite_by_tile_and_date,
     get_season_date_ranges,
+    seasonal_composite_exists,
 )
 from ds_download.observability import configure_logging
 
@@ -95,8 +96,23 @@ def main_workflow(
     for season_name, init_date, end_date in get_season_date_ranges(year):
         for tile in tiles:
             try:
+                if seasonal_composite_exists(tile, year, season_name):
+                    logger.info(
+                        "seasonal composite already exists; skipping pipeline",
+                        extra={"pipeline.year": year, "pipeline.season": season_name, "s2.tile": tile},
+                    )
+                    continue
+
                 start_time = time.time()
-                download_product_using_sentinel_api(True, True, init_date, end_date, tile_id=tile, quantize_rasters=quantize_rasters)
+                download_product_using_sentinel_api(
+                    True,
+                    True,
+                    init_date,
+                    end_date,
+                    tile_id=tile,
+                    quantize_rasters=quantize_rasters,
+                    season_name=season_name,
+                )
                 download_time = time.time() - start_time
                 log_time(log_file_path, year, season_name, tile, 'download_product_using_sentinel_api', download_time)
 

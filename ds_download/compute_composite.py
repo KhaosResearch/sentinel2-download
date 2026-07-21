@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 from collections import defaultdict
 from datetime import datetime
 from hashlib import sha256
@@ -279,6 +280,12 @@ def _get_composite(
     return composite_metadata
 
 
+def seasonal_composite_exists(tile: str, year: int, season_name: str) -> bool:
+    prefix = join(tile, str(year), season_name, "composites", "")
+    mongo_collection = MongoConnection().get_composite_collection_object()
+    return mongo_collection.find_one({"S3BandsPrefix": {"$regex": f"^{re.escape(prefix)}"}}) is not None
+
+
 def _get_product_prefix(product_title: str) -> str:
     splits = product_title.split("_T")
     tile_id = str(splits[1][0:5])
@@ -342,17 +349,21 @@ def _create_composite(
     bucket_name = minio_client.bucket_name
     mongo_composites_collection = MongoConnection().get_composite_collection_object()
 
+    products_metadata = list(products_metadata)
     products_titles = [product["title"] for product in products_metadata]
+    products_dates = [product_title.split("_")[2] for product_title in products_titles]
     logger.info(
         "composite creation started",
-        extra={"product.count": len(products_titles), "s2.products": products_titles},
+        extra={
+            "product.count": len(products_titles),
+            "s2.products": products_titles,
+            "pipeline.period": period,
+            "pipeline.season": period_label,
+        },
     )
 
     tmp_dir = os.environ.get("TMP_DIR")
 
-    products_metadata = list(products_metadata)
-    products_titles = []
-    products_dates = []
     bands_paths_products = []
     indexes_paths_products = []
     cloud_masks_temp_paths = []
@@ -361,12 +372,14 @@ def _create_composite(
 
     logger.info(
         "composite cloud mask download started",
-        extra={"product.count": len(products_titles)},
+        extra={
+            "product.count": len(products_titles),
+            "pipeline.period": period,
+            "pipeline.season": period_label,
+        },
     )
     for product_metadata in products_metadata:
         product_title = product_metadata["title"]
-        products_titles.append(product_title)
-        products_dates.append(product_title.split("_")[2])
 
         (rasters_paths, is_band) = _get_product_rasters_paths(
             product_title, minio_client, False
@@ -448,6 +461,15 @@ def _create_composite(
                     composite_bands_dict[raster_filename].append(raster_path)
 
             for band_filename, band_paths in composite_bands_dict.items():
+                logger.info(
+                    "composite raster started",
+                    extra={
+                        "s2.composite": composite_title,
+                        "raster.name": band_filename,
+                        "minio.folder": minio_folder_name,
+                        "input.raster_count": len(band_paths),
+                    },
+                )
 
                 if len(band_paths) != len(products_titles):
                     logger.warning(
@@ -504,6 +526,14 @@ def _create_composite(
                     temp_path_composite_band, "w", **kwargs_composite
                 ) as file_composite:
                     file_composite.write(composite_i_band)
+                logger.info(
+                    "composite raster written locally",
+                    extra={
+                        "s2.composite": composite_title,
+                        "raster.name": band_filename,
+                        "local.path": str(temp_path_composite_band),
+                    },
+                )
 
                 # Upload raster to minio
                 band_filename = band_filename[:-3] + "tif" if band_filename.endswith(".jp2") else band_filename
@@ -589,6 +619,10 @@ def _create_composite(
         composite_metadata["compositeMethod"] = method
 
         # Upload metadata to mongo
+        logger.info(
+            "composite metadata insert started",
+            extra={"s2.composite": composite_title, "index.count": len(uploaded_composite_indexes)},
+        )
         result = mongo_composites_collection.insert_one(composite_metadata)
         logger.info(
             "composite metadata inserted in mongo",
@@ -648,6 +682,7 @@ def create_composite_by_tile_and_date(
             "pipeline.start_date": start_date.isoformat(),
             "pipeline.end_date": end_date.isoformat(),
             "pipeline.period": period,
+            "pipeline.season": period_label,
         },
     )
     products_metadata_cursor = get_products_by_tile_and_date(
@@ -671,6 +706,8 @@ def create_composite_by_tile_and_date(
             "product.count": len(products_metadata),
             "max.product_count": max_products,
             "include.product_indexes": include_product_indexes,
+            "pipeline.period": period,
+            "pipeline.season": period_label,
         },
     )
     if not products_metadata:
@@ -682,17 +719,29 @@ def create_composite_by_tile_and_date(
                 products_metadata
             )
     if composite_metadata is None:
-        composite_metadata = _create_composite(
-            products_metadata,
-            method=method,
-            include_indexes=include_product_indexes,
-            period=period,
-            period_label=period_label,
-            storage_year=storage_year,
-            storage_period=storage_period,
-            cleanup_products=cleanup_products,
-            quantize_rasters=quantize_rasters,
-        )
+        try:
+            composite_metadata = _create_composite(
+                products_metadata,
+                method=method,
+                include_indexes=include_product_indexes,
+                period=period,
+                period_label=period_label,
+                storage_year=storage_year,
+                storage_period=storage_period,
+                cleanup_products=cleanup_products,
+                quantize_rasters=quantize_rasters,
+            )
+        except Exception:
+            logger.exception(
+                "composite creation failed",
+                extra={
+                    "s2.tile": tile,
+                    "pipeline.period": period,
+                    "pipeline.season": period_label,
+                    "product.count": len(products_metadata),
+                },
+            )
+            raise
         
         # Check if there was another composite for the same month and tile
         if period == "monthly":

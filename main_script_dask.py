@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from dask.distributed import Client
 from dotenv import load_dotenv
 from ds_download.download_using_sentinel_api import download_product_using_sentinel_api
-from ds_download.compute_composite import create_composite_by_tile_and_date, get_season_date_ranges
+from ds_download.compute_composite import create_composite_by_tile_and_date, get_season_date_ranges, seasonal_composite_exists
 from ds_download.observability import configure_logging
 
 # Load environment variables
@@ -66,7 +66,22 @@ def process_season(year: int, season_name: str, start_date: datetime, end_date: 
             "dask seasonal task started",
             extra={"pipeline.year": year, "pipeline.season": season_name, "s2.tile": tile},
         )
-        download_product_using_sentinel_api(True, True, start_date, end_date, tile_id=tile, quantize_rasters=quantize_rasters)
+        if seasonal_composite_exists(tile, year, season_name):
+            logger.info(
+                "seasonal composite already exists; skipping pipeline",
+                extra={"pipeline.year": year, "pipeline.season": season_name, "s2.tile": tile},
+            )
+            return f"Skipped existing {tile}, {year}-{season_name}"
+
+        download_product_using_sentinel_api(
+            True,
+            True,
+            start_date,
+            end_date,
+            tile_id=tile,
+            quantize_rasters=quantize_rasters,
+            season_name=season_name,
+        )
 
         create_composite_by_tile_and_date(
             calculate_raw_indexes=False,
