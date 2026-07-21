@@ -10,8 +10,6 @@ from typing import Iterable, List, Tuple
 
 import numpy as np
 import rasterio
-from rasterio.enums import Resampling
-from rasterio.windows import bounds, from_bounds
 
 
 from os.path import join
@@ -239,97 +237,6 @@ def _composite(
     return (composite_out, composite_kwargs)
 
 
-def _read_mask_window(mask_file, target_file, window):
-    out_shape = (int(window.height), int(window.width))
-    mask_window = window
-    if (
-        mask_file.width != target_file.width
-        or mask_file.height != target_file.height
-        or mask_file.transform != target_file.transform
-    ):
-        window_bounds = bounds(window, target_file.transform)
-        mask_window = from_bounds(*window_bounds, transform=mask_file.transform)
-
-    return mask_file.read(
-        window=mask_window,
-        out_shape=(1, *out_shape),
-        resampling=Resampling.nearest,
-    )[0].astype(bool)
-
-
-def _write_composite_raster(
-    band_paths: List[str],
-    output_path: Path,
-    method: str = "median",
-    cloud_mask_paths: List[str] = None,
-) -> float:
-    if cloud_mask_paths is None:
-        cloud_mask_paths = []
-
-    band_files = []
-    mask_files = []
-    try:
-        band_files = [rasterio.open(path) for path in band_paths]
-        mask_files = [rasterio.open(path) for path in cloud_mask_paths]
-
-        first_file = band_files[0]
-        if any(
-            band_file.count != first_file.count
-            or band_file.width != first_file.width
-            or band_file.height != first_file.height
-            for band_file in band_files
-        ):
-            shapes = [(band_file.count, band_file.height, band_file.width) for band_file in band_files]
-            raise ValueError(f"Not all bands have the same shape\n{shapes}")
-
-        kwargs_composite = first_file.meta.copy()
-        kwargs_composite.update(driver="GTiff", dtype="float32", nodata=np.nan)
-        output_path.parent.mkdir(exist_ok=True, parents=True)
-
-        valid_sum = 0.0
-        valid_count = 0
-        with rasterio.open(output_path, "w", **kwargs_composite) as file_composite:
-            for _, window in first_file.block_windows(1):
-                composite_bands = []
-                for i, band_file in enumerate(band_files):
-                    band = band_file.read(window=window).astype(np.float32)
-                    band = np.where(band == 0, np.nan, band)
-                    if i < len(mask_files):
-                        cloud_mask = _read_mask_window(mask_files[i], band_file, window)
-                        band = np.where(cloud_mask.reshape((1, *cloud_mask.shape)), np.nan, band)
-                    composite_bands.append(band)
-
-                if method == "median":
-                    composite_out = np.nanmedian(composite_bands, axis=0)
-                elif method == "mean":
-                    composite_out = np.nanmean(composite_bands, axis=0)
-                else:
-                    raise ValueError(f"Method '{method}' is not recognized.")
-
-                file_composite.write(composite_out.astype(np.float32), window=window)
-                valid_pixels = np.isfinite(composite_out)
-                valid_sum += float(np.nansum(composite_out))
-                valid_count += int(np.count_nonzero(valid_pixels))
-
-        return valid_sum / valid_count if valid_count else np.nan
-    finally:
-        for raster_file in band_files + mask_files:
-            raster_file.close()
-        for band_path in band_paths:
-            Path.unlink(Path(band_path))
-
-
-def _write_cloud_mask_raster(scl_path: str, output_path: str, scl_cloud_values: List[int]) -> None:
-    with rasterio.open(scl_path) as scl_file:
-        kwargs = scl_file.meta.copy()
-        kwargs.update(driver="GTiff", dtype="uint8", nodata=0)
-        with rasterio.open(output_path, "w", **kwargs) as mask_file:
-            for _, window in scl_file.block_windows(1):
-                scl_band = scl_file.read(window=window)
-                cloud_mask = np.isin(scl_band, scl_cloud_values).astype(np.uint8)
-                mask_file.write(cloud_mask, window=window)
-
-
 def _get_hash_composite(products_titles: List[str]) -> str:
     """
     Calculate the hash of a composite using its products' titles and the execution mode.
@@ -460,7 +367,7 @@ def _create_composite(
     bands_paths_products = []
     indexes_paths_products = []
     cloud_masks_temp_paths = []
-    cloud_mask_paths = {"10": [], "20": [], "60": []}
+    cloud_masks = {"10": [], "20": [], "60": []}
     scl_cloud_values = [3, 8, 9, 10]
 
     logger.info(
@@ -499,10 +406,27 @@ def _create_composite(
                 spatial_resolution = str(
                     int(_get_spatial_resolution_raster(temp_path_product_band))
                 )
-                cloud_mask_path = str(Path(temp_path_product_band).with_suffix(".tif"))
-                _write_cloud_mask_raster(temp_path_product_band, cloud_mask_path, scl_cloud_values)
-                cloud_masks_temp_paths.append(cloud_mask_path)
-                cloud_mask_paths[spatial_resolution].append(cloud_mask_path)
+                scl_band = _read_raster(temp_path_product_band)
+                # Binarize scl band to get a cloud mask
+                cloud_mask = np.isin(scl_band, scl_cloud_values).astype(bool)
+                cloud_masks[spatial_resolution].append(cloud_mask)
+                kwargs = _get_kwargs_raster(temp_path_product_band)
+                with rasterio.open(temp_path_product_band, "w", **kwargs) as f:
+                    f.write(cloud_mask)
+
+                # 10m spatial resolution cloud mask raster does not exists, have to be rescaled from 20m mask
+                if "SCL_20m" in band_filename:
+                    scl_band_10m_temp_path = temp_path_product_band.replace(
+                        "_20m.jp2", "_10m.jp2"
+                    )
+                    cloud_mask_10m = _read_raster(
+                        temp_path_product_band,
+                        rescale=True,
+                        path_to_disk=scl_band_10m_temp_path,
+                        to_tif=False,
+                    )
+                    cloud_masks_temp_paths.append(scl_band_10m_temp_path)
+                    cloud_masks["10"].append(cloud_mask_10m)
 
     composite_title = _get_title_composite(products_titles)
     temp_path_composite = Path(tmp_dir, composite_title)
@@ -577,6 +501,19 @@ def _create_composite(
                         temp_product_dirs.append(temp_dir_product)
                     temp_path_list.append(temp_path_product_band)
 
+                spatial_resolution = str(
+                    int(_get_spatial_resolution_raster(temp_path_list[0]))
+                )
+                raster_cloud_masks = cloud_masks[spatial_resolution] if apply_cloud_masks else []
+                composite_i_band, kwargs_composite = _composite(
+                    temp_path_list,
+                    method=method,
+                    cloud_masks=raster_cloud_masks,
+                )
+
+                # Save raster to disk
+                temp_path_composite_band.parent.mkdir(exist_ok=True, parents=True)
+
                 temp_path_composite_band = str(temp_path_composite_band)
                 if temp_path_composite_band.endswith(".jp2"):
                     temp_path_composite_band = temp_path_composite_band[:-3] + "tif"
@@ -584,21 +521,11 @@ def _create_composite(
                 temp_path_composite_band = Path(temp_path_composite_band)
 
                 temp_paths_composite_bands.append(temp_path_composite_band)
-                spatial_resolution = str(
-                    int(_get_spatial_resolution_raster(temp_path_list[0]))
-                )
-                raster_cloud_mask_paths = []
-                if apply_cloud_masks:
-                    raster_cloud_mask_paths = cloud_mask_paths[spatial_resolution]
-                    if not raster_cloud_mask_paths and spatial_resolution == "10":
-                        raster_cloud_mask_paths = cloud_mask_paths["20"]
 
-                raster_mean_value = _write_composite_raster(
-                    temp_path_list,
-                    temp_path_composite_band,
-                    method=method,
-                    cloud_mask_paths=raster_cloud_mask_paths,
-                )
+                with rasterio.open(
+                    temp_path_composite_band, "w", **kwargs_composite
+                ) as file_composite:
+                    file_composite.write(composite_i_band)
                 logger.info(
                     "composite raster written locally",
                     extra={
@@ -646,7 +573,7 @@ def _create_composite(
                         "name": index_name,
                         "rasterS3Bucket": bucket_name,
                         "rasterS3Key": minio_band_path,
-                        "rasterMeanValue": float(raster_mean_value),
+                        "rasterMeanValue": float(np.nanmean(composite_i_band)),
                     }
                     if encoding:
                         uploaded_composite_indexes[index_name]["encoding"] = encoding

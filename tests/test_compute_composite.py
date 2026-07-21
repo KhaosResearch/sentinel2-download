@@ -1,13 +1,7 @@
-import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import Mock, patch
 
-import numpy as np
-import rasterio
-from rasterio.transform import from_origin
-
-from ds_download.compute_composite import seasonal_composite_exists, _write_composite_raster
+from ds_download.compute_composite import seasonal_composite_exists
 
 
 class SeasonalCompositeExistsTests(unittest.TestCase):
@@ -24,51 +18,6 @@ class SeasonalCompositeExistsTests(unittest.TestCase):
         composite_collection.find_one.assert_called_once_with(
             {"S3BandsPrefix": {"$regex": "^30STF/2021/Spring/composites/"}}
         )
-
-
-class WriteCompositeRasterTests(unittest.TestCase):
-    def test_writes_masked_median_without_loading_full_raster_result(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            band_1 = temp_path / "band_1.tif"
-            band_2 = temp_path / "band_2.tif"
-            mask_1 = temp_path / "mask_1.tif"
-            mask_2 = temp_path / "mask_2.tif"
-            output = temp_path / "composite.tif"
-
-            profile = {
-                "driver": "GTiff",
-                "height": 2,
-                "width": 3,
-                "count": 1,
-                "dtype": "float32",
-                "transform": from_origin(0, 2, 1, 1),
-            }
-            self._write_raster(band_1, [[1, 2, 0], [4, 5, 6]], profile)
-            self._write_raster(band_2, [[3, 4, 7], [8, 10, 12]], profile)
-            self._write_raster(mask_1, [[0, 1, 0], [0, 0, 0]], profile)
-            self._write_raster(mask_2, [[0, 0, 0], [1, 0, 0]], profile)
-
-            raster_mean = _write_composite_raster(
-                [str(band_1), str(band_2)],
-                output,
-                method="median",
-                cloud_mask_paths=[str(mask_1), str(mask_2)],
-            )
-
-            with rasterio.open(output) as raster:
-                composite = raster.read()
-
-            expected = np.array([[[2, 4, 7], [4, 7.5, 9]]], dtype=np.float32)
-            np.testing.assert_allclose(composite, expected)
-            self.assertAlmostEqual(float(np.nanmean(expected)), raster_mean, places=6)
-            self.assertFalse(band_1.exists())
-            self.assertFalse(band_2.exists())
-
-    @staticmethod
-    def _write_raster(path, values, profile):
-        with rasterio.open(path, "w", **profile) as raster:
-            raster.write(np.array([values], dtype=np.float32))
 
 
 if __name__ == "__main__":
