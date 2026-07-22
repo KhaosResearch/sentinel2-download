@@ -26,6 +26,12 @@ from ds_download.raster_encoding import encode_geotiff
 
 logger = logging.getLogger(__name__)
 
+_PRODUCT_INDEXES = [
+    "Moisture", "NDVI", "NDWI", "NDSI", "EVI", "OSAVI",
+    "EVI2", "NDRE", "NDYI", "MNDWI", "BRI", "TCI",
+    "RI", "BSI", "CRI1",
+]
+
 def get_products_by_tile_and_date(tile, start_date, end_date, min_useful_data_percentage):
 
     mongo_collection = MongoConnection().get_collection_object()
@@ -386,13 +392,6 @@ def _get_product_prefix(product_title: str) -> str:
     return join(tile_id, year, month.strftime("%B"), "products", product_title, "")
 
 
-def _product_has_index_rasters(product_metadata: dict, minio_client: MinioConnection) -> bool:
-    indexes_prefix = join(_get_product_prefix(product_metadata["title"]), "indexes", "")
-    for _ in minio_client.list_objects(minio_client.bucket_name, prefix=indexes_prefix, recursive=True):
-        return True
-    return False
-
-
 def _cleanup_products_from_minio(products_metadata: Iterable[dict], minio_client: MinioConnection) -> None:
     bucket_name = minio_client.bucket_name
     mongo_collection = MongoConnection().get_collection_object()
@@ -440,6 +439,15 @@ def _cleanup_month_folders_from_minio(
             },
         )
         month = (month + timedelta(days=31)).replace(day=1)
+
+
+def _calculate_product_indexes(products_metadata: Iterable[dict], quantize_rasters: bool) -> None:
+    for product_metadata in products_metadata:
+        calculate_raw_index(
+            product_title=product_metadata["title"],
+            index=_PRODUCT_INDEXES,
+            quantize_rasters=quantize_rasters,
+        )
 
 
 def _create_composite(
@@ -787,13 +795,6 @@ def create_composite_by_tile_and_date(
 
     max_products = int(os.environ.get("MAX_PRODUCTS_COMPOSITE"))
     products_metadata = list(products_metadata_cursor)
-    if include_product_indexes:
-        minio_client = MinioConnection()
-        products_metadata = [
-            product_metadata
-            for product_metadata in products_metadata
-            if _product_has_index_rasters(product_metadata, minio_client)
-        ]
     products_metadata = products_metadata[:max_products]
     logger.info(
         "composite products selected",
@@ -816,6 +817,8 @@ def create_composite_by_tile_and_date(
             )
     if composite_metadata is None:
         try:
+            if include_product_indexes:
+                _calculate_product_indexes(products_metadata, quantize_rasters)
             composite_metadata = _create_composite(
                 products_metadata,
                 method=method,

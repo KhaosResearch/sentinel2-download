@@ -10,6 +10,7 @@ from rasterio.transform import from_origin
 
 from ds_download.compute_composite import (
     _cleanup_month_folders_from_minio,
+    create_composite_by_tile_and_date,
     seasonal_composite_exists,
     _write_composite_raster,
 )
@@ -52,6 +53,37 @@ class CleanupMonthFoldersFromMinioTests(unittest.TestCase):
             ["30STF/2021/March/", "30STF/2021/April/"],
         )
         self.assertEqual(minio_client.remove_object.call_count, 2)
+
+
+class CreateCompositeByTileAndDateTests(unittest.TestCase):
+    def test_calculates_product_indexes_after_max_product_selection(self):
+        products = [
+            {"title": f"S2A_MSIL2A_2021030{i}T000000_NXXX_RXXX_T30STF_2021030{i}T000000"}
+            for i in range(1, 4)
+        ]
+
+        with (
+            patch.dict("os.environ", {"MAX_PRODUCTS_COMPOSITE": "2"}),
+            patch("ds_download.compute_composite.get_products_by_tile_and_date", return_value=products),
+            patch("ds_download.compute_composite._get_composite", return_value=None),
+            patch("ds_download.compute_composite._create_composite", return_value={"title": "composite"}),
+            patch("ds_download.compute_composite.calculate_raw_index") as calculate_raw_index,
+        ):
+            create_composite_by_tile_and_date(
+                calculate_raw_indexes=False,
+                calculate_intermediate_products=False,
+                tile="30STF",
+                start_date=datetime(2021, 3, 1),
+                end_date=datetime(2021, 6, 1),
+                min_useful_data_percentage=30,
+                include_product_indexes=True,
+                period="seasonal",
+            )
+
+        self.assertEqual(
+            [call.kwargs["product_title"] for call in calculate_raw_index.call_args_list],
+            [products[0]["title"], products[1]["title"]],
+        )
 
 
 class WriteCompositeRasterTests(unittest.TestCase):

@@ -73,7 +73,7 @@ def _run_seasonal_pipeline_for_tile(
 
             logger.info("seasonal pipeline started", extra=season_context)
             download_product_using_sentinel_api(
-                calculate_raw_indexes=True,
+                calculate_raw_indexes=False,
                 calculate_intermediate_products=True,
                 from_date=start_date,
                 to_date=end_date,

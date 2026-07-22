@@ -74,7 +74,7 @@ def process_season(year: int, season_name: str, start_date: datetime, end_date: 
             return f"Skipped existing {tile}, {year}-{season_name}"
 
         download_product_using_sentinel_api(
-            True,
+            False,
             True,
             start_date,
             end_date,

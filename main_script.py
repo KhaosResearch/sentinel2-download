@@ -105,7 +105,7 @@ def main_workflow(
 
                 start_time = time.time()
                 download_product_using_sentinel_api(
-                    True,
+                    False,
                     True,
                     init_date,
                     end_date,
