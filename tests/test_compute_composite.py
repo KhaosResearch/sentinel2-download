@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -7,7 +8,11 @@ import numpy as np
 import rasterio
 from rasterio.transform import from_origin
 
-from ds_download.compute_composite import seasonal_composite_exists, _write_composite_raster
+from ds_download.compute_composite import (
+    _cleanup_month_folders_from_minio,
+    seasonal_composite_exists,
+    _write_composite_raster,
+)
 
 
 class SeasonalCompositeExistsTests(unittest.TestCase):
@@ -24,6 +29,29 @@ class SeasonalCompositeExistsTests(unittest.TestCase):
         composite_collection.find_one.assert_called_once_with(
             {"S3BandsPrefix": {"$regex": "^30STF/2021/Spring/composites/"}}
         )
+
+
+class CleanupMonthFoldersFromMinioTests(unittest.TestCase):
+    def test_deletes_month_prefixes_in_date_range(self):
+        minio_client = Mock()
+        minio_client.bucket_name = "rasters"
+        minio_client.list_objects.side_effect = [
+            [Mock(object_name="30STF/2021/March/products/a.jp2")],
+            [Mock(object_name="30STF/2021/April/composites/b.tif")],
+        ]
+
+        _cleanup_month_folders_from_minio(
+            "30STF",
+            datetime(2021, 3, 1),
+            datetime(2021, 5, 1),
+            minio_client,
+        )
+
+        self.assertEqual(
+            [call.kwargs["prefix"] for call in minio_client.list_objects.call_args_list],
+            ["30STF/2021/March/", "30STF/2021/April/"],
+        )
+        self.assertEqual(minio_client.remove_object.call_count, 2)
 
 
 class WriteCompositeRasterTests(unittest.TestCase):

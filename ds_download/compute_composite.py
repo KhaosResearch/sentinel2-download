@@ -2,7 +2,7 @@ import logging
 import os
 import re
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from hashlib import sha256
 from itertools import compress
 from pathlib import Path
@@ -415,6 +415,31 @@ def _cleanup_products_from_minio(products_metadata: Iterable[dict], minio_client
                 "object.count": len(objects),
             },
         )
+
+
+def _cleanup_month_folders_from_minio(
+    tile: str,
+    start_date: datetime,
+    end_date: datetime,
+    minio_client: MinioConnection,
+) -> None:
+    bucket_name = minio_client.bucket_name
+    month = datetime(start_date.year, start_date.month, 1)
+    while month < end_date:
+        prefix = join(tile, str(month.year), month.strftime("%B"), "")
+        objects = list(minio_client.list_objects(bucket_name, prefix=prefix, recursive=True))
+        for obj in objects:
+            minio_client.remove_object(bucket_name=bucket_name, object_name=obj.object_name)
+        logger.info(
+            "deleted seasonal source month folder",
+            extra={
+                "s2.tile": tile,
+                "minio.bucket": bucket_name,
+                "minio.prefix": prefix,
+                "object.count": len(objects),
+            },
+        )
+        month = (month + timedelta(days=31)).replace(day=1)
 
 
 def _create_composite(
@@ -883,6 +908,9 @@ def create_composite_by_tile_and_date(
             is_composite=True,
             quantize_rasters=quantize_rasters
         )
+
+    if cleanup_products and period == "seasonal":
+        _cleanup_month_folders_from_minio(tile, start_date, end_date, MinioConnection())
 
 
 def get_season_date_ranges(year: int) -> List[Tuple[str, datetime, datetime]]:
