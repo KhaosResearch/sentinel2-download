@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from ds_download.band_arithmetic import (
     bri,
     bsi,
+    clear_read_cache,
     cloud_mask,
     cri1,
     evi,
@@ -26,7 +27,7 @@ from ds_download.band_arithmetic import (
     ri,
     true_color
 )
-from ds_download.minio_connection import MinioConnection
+from ds_download.minio_connection import MinioConnection, get_minio_bucket_name
 from ds_download.mongo_connection import MongoConnection
 from ds_download.observability import configure_logging
 from ds_download.raster_encoding import encode_geotiff
@@ -181,7 +182,7 @@ def get_index(index_name, bands_dict, product_title, minio_folder_name, is_compo
     except Exception as e:
         raise e
 
-    minio_client = MinioConnection()
+    minio_client = MinioConnection(bucket_name=get_minio_bucket_name(is_composite))
     minio_bucket_name = minio_client.bucket_name
 
     if is_composite:
@@ -246,6 +247,7 @@ def calculate_raw_index(
     Example: python raw_index_calculation.py --uid dad7f379-de8c-49ec-b4cf-44348d0f418c --index ndvi --index ndsi --temp-dir ./data
     """
     configure_logging()
+    clear_read_cache()
     logger.info(
         "raw index calculation requested",
         extra={
@@ -290,7 +292,7 @@ def calculate_raw_index(
     if minio_folder_name not in product_data:
         product_data[minio_folder_name] = []
 
-    minio_client = MinioConnection()
+    minio_client = MinioConnection(bucket_name=get_minio_bucket_name(is_composite))
     minio_bucket_name = minio_client.bucket_name
 
     for idx in index:
@@ -357,3 +359,4 @@ def calculate_raw_index(
             "failed to remove local product folder",
             extra={"s2.product": product_title, "local.path": e.filename, "error": e.strerror},
         )
+    clear_read_cache()

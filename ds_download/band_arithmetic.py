@@ -1,3 +1,4 @@
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -41,7 +42,8 @@ def _rescale_band(
 
     return band, kwargs
 
-def read(filename):
+@lru_cache(maxsize=16)
+def _read_cached(filename: str):
     """
     Read raster data from file.
     :param filename: Path to input file.
@@ -52,6 +54,15 @@ def read(filename):
         B[B == 0] = np.nan
         kwargs = f.meta
     return B, kwargs
+
+
+def read(filename):
+    band, kwargs = _read_cached(str(filename))
+    return band, kwargs.copy()
+
+
+def clear_read_cache() -> None:
+    _read_cached.cache_clear()
 
 
 def cloud_cover_percentage(b3: Path, b4: Path, b11: Path, tau: float = 0.2, *, output: Path= None) -> float:
