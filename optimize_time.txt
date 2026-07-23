@@ -1,0 +1,25 @@
+  Main Bottlenecks
+
+  DONE 1. Seasonal downloads and indexes every product returned by the Sentinel API before choosing the composite inputs.
+     In ds_download/download_using_sentinel_api.py:300, every product in the season response is processed. Then later ds_download/compute_composite.py:788 filters/slices to MAX_PRODUCTS_COMPOSITE. So if the API returns 25 products and MAX_PRODUCTS_COMPOSITE=5, the code may still calculate indexes for all 25.
+
+  2. Seasonal mode calculates CloudMask plus 15 raw indexes per product.
+     Dask seasonal calls download_product_using_sentinel_api(True, True, ...) in main_script_dask.py:76. That triggers CloudMask and then this full list in ds_download/download_from_google_cloud.py:327: Moisture, NDVI, NDWI, NDSI, EVI, OSAVI, EVI2, NDRE, NDYI, MNDWI, BRI, TCI, RI, BSI, CRI1.
+
+  DONE 3. Each index re-reads full raster bands from disk.
+     ds_download/band_arithmetic.py:44 reads the full raster into float32. Then each index function calls that repeatedly. Roughly, the 15 indexes do about 34 full-band reads per product, plus output writes.
+
+  4. There is an expensive storage round trip.
+     Product bands are downloaded from Google Cloud and uploaded to MinIO in ds_download/download_from_google_cloud.py:214 and ds_download/download_from_google_cloud.py:241. Then index calculation downloads needed bands back from MinIO in ds_download/raw_index_calculation.py:317. That is slow by design.
+
+  5. One tile task is mostly sequential.
+     Dask runs multiple tiles at once, but inside one tile/season task products and indexes are processed sequentially. More workers improve total throughput across tiles, not the runtime of a single tile.
+
+  Likely Ranking
+
+  1. Computing all indexes for all candidate products before selecting MAX_PRODUCTS_COMPOSITE.
+  2. Repeated full-raster reads/writes for each index.
+  3. MinIO/GCS round trips.
+  4. Seasonal composite building: it downloads every selected product band/index back from MinIO and writes one seasonal raster per band/index.
+
+  The lazy next fix would be: calculate only what is needed to rank products first, select the products, then compute the 15 indexes only for selected products. That probably cuts the most time without redesigning the whole pipeline.

@@ -1,0 +1,2 @@
+windowed compositing: read, mask, median, and write small raster windows.
+With MAX_PRODUCTS_COMPOSITE=2, that would hold only two small windows plus their mask windows, instead of two complete 10m tiles.
