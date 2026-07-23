@@ -1,7 +1,7 @@
 import argparse
 import logging
 from datetime import datetime, timedelta
-from dask.distributed import Client
+from dask.distributed import Client, as_completed
 from dotenv import load_dotenv
 from ds_download.download_using_sentinel_api import download_product_using_sentinel_api
 from ds_download.compute_composite import create_composite_by_tile_and_date, get_season_date_ranges, seasonal_composite_exists
@@ -55,7 +55,7 @@ def process_month(year: int, month: int, tile: str, quantize_rasters: bool = Fal
         return f"Error for {tile}, {year}-{month}: {str(e)}"
 
 
-def process_season(year: int, season_name: str, start_date: datetime, end_date: datetime, tile: str, cleanup_products: bool, quantize_rasters: bool = False) -> str:
+def process_season(year: int, season_name: str, start_date: datetime, end_date: datetime, tile: str, cleanup_products: bool, quantize_rasters: bool = False) -> dict:
     """
     Process a season's worth of Sentinel-2 data for a specific tile by downloading products
     with per-product indexes and creating seasonal mean rasters.
@@ -71,7 +71,7 @@ def process_season(year: int, season_name: str, start_date: datetime, end_date: 
                 "seasonal composite already exists; skipping pipeline",
                 extra={"pipeline.year": year, "pipeline.season": season_name, "s2.tile": tile},
             )
-            return f"Skipped existing {tile}, {year}-{season_name}"
+            return {"status": "skipped", "tile": tile, "year": year, "season": season_name}
 
         download_product_using_sentinel_api(
             False,
@@ -100,19 +100,24 @@ def process_season(year: int, season_name: str, start_date: datetime, end_date: 
             quantize_rasters=quantize_rasters,
         )
 
-        message = f"Processed {tile}, {year}-{season_name}"
         logger.info(
             "dask seasonal task finished",
             extra={"pipeline.year": year, "pipeline.season": season_name, "s2.tile": tile},
         )
-        return message
+        return {"status": "finished", "tile": tile, "year": year, "season": season_name}
 
     except Exception as e:
         logger.exception(
             "dask seasonal task failed",
             extra={"pipeline.year": year, "pipeline.season": season_name, "s2.tile": tile},
         )
-        return f"Error for {tile}, {year}-{season_name}: {str(e)}"
+        return {
+            "status": "failed",
+            "tile": tile,
+            "year": year,
+            "season": season_name,
+            "error": str(e),
+        }
 
 
 # Define the tiles to process
@@ -154,8 +159,13 @@ def main() -> None:
 
     for year in years:
         for season_name, start_date, end_date in get_season_date_ranges(year):
-            futures = [
-                client.submit(
+            futures = {}
+            for tile in tiles:
+                logger.info(
+                    "dask seasonal tile started",
+                    extra={"pipeline.year": year, "pipeline.season": season_name, "s2.tile": tile},
+                )
+                future = client.submit(
                     process_season,
                     year,
                     season_name,
@@ -165,13 +175,29 @@ def main() -> None:
                     not args.keep_products,
                     args.quantize_rasters,
                 )
-                for tile in tiles
-            ]
+                futures[future] = {"pipeline.year": year, "pipeline.season": season_name, "s2.tile": tile}
 
-            results = client.gather(futures)
+            for future in as_completed(futures):
+                context = futures[future]
+                try:
+                    result = future.result()
+                except Exception as e:
+                    logger.exception(
+                        "dask seasonal tile failed",
+                        extra={**context, "error": str(e)},
+                    )
+                    continue
 
-            for result in results:
-                logger.info("dask task result", extra={"task.result": result})
+                if result["status"] == "failed":
+                    logger.error(
+                        "dask seasonal tile failed",
+                        extra={**context, "error": result["error"]},
+                    )
+                else:
+                    logger.info(
+                        "dask seasonal tile finished",
+                        extra={**context, "task.status": result["status"]},
+                    )
 
 
 if __name__ == "__main__":
