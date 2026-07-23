@@ -11,6 +11,7 @@ from rasterio.transform import from_origin
 from ds_download.compute_composite import (
     _cleanup_month_folders_from_minio,
     create_composite_by_tile_and_date,
+    get_season_date_ranges,
     seasonal_composite_exists,
     _write_composite_raster,
 )
@@ -30,6 +31,16 @@ class SeasonalCompositeExistsTests(unittest.TestCase):
         composite_collection.find_one.assert_called_once_with(
             {"S3BandsPrefix": {"$regex": "^30STF/2021/Spring/composites/"}}
         )
+
+
+class GetSeasonDateRangesTests(unittest.TestCase):
+    def test_reads_seasons_from_app_data_json(self):
+        loaded_ranges = [("spring", datetime(2021, 3, 1), datetime(2021, 4, 16))]
+
+        with patch("ds_download.compute_composite._load_season_date_ranges", return_value=loaded_ranges) as load_ranges:
+            self.assertEqual(loaded_ranges, get_season_date_ranges(2021))
+
+        load_ranges.assert_called_once_with("app_data/seasons.json")
 
 
 class CleanupMonthFoldersFromMinioTests(unittest.TestCase):

@@ -19,6 +19,7 @@ from os.path import join
 from ds_download.minio_connection import MinioConnection, get_minio_bucket_name
 from ds_download.mongo_connection import MongoConnection
 from ds_download.observability import configure_logging
+from ds_download.download_using_sentinel_api import _load_season_date_ranges
 
 from ds_download.raw_index_calculation import calculate_raw_index
 from ds_download.band_arithmetic import _rescale_band
@@ -919,12 +920,7 @@ def create_composite_by_tile_and_date(
 
 
 def get_season_date_ranges(year: int) -> List[Tuple[str, datetime, datetime]]:
-    return [
-        ("Winter", datetime(year - 1, 12, 1), datetime(year, 3, 1)),
-        ("Spring", datetime(year, 3, 1), datetime(year, 6, 1)),
-        ("Summer", datetime(year, 6, 1), datetime(year, 9, 1)),
-        ("Autumn", datetime(year, 9, 1), datetime(year, 12, 1)),
-    ]
+    return _load_season_date_ranges("app_data/seasons.json")
 
 
 def create_seasonal_composites_by_tile_and_year(
