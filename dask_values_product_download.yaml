@@ -55,8 +55,10 @@ worker:
       value: "<minio-access-key>"
     - name: MINIO_SECRET_KEY
       value: "<minio-secret-key>"
-    - name: MINIO_BUCKET_NAME
-      value: "<minio-bucket-name>"
+    - name: MINIO_BUCKET_NAME_PRODUCTS
+      value: "<minio-products-bucket-name>"
+    - name: MINIO_BUCKET_NAME_COMPOSITES
+      value: "<minio-composites-bucket-name>"
     - name: MONGO_HOST
       value: "<mongo-host>"
     - name: MONGO_PORT
@@ -67,8 +69,8 @@ worker:
       value: "<mongo-password>"
     - name: MONGO_DATABASE_NAME
       value: "<mongo-database-name>"
-    - name: MONGO_COLLECTION_NAME
-      value: "<mongo-collection-name>"
+    - name: MONGO_PRODUCT_COLLECTION_NAME
+      value: "<mongo-product-collection-name>"
     - name: MONGO_COMPOSITE_COLLECTION_NAME
       value: "<mongo-composite-collection-name>"
     - name: TMP_DIR

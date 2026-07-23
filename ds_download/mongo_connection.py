@@ -36,7 +36,7 @@ class MongoConnection:
         username (str, optional): The MongoDB username. Defaults to the value from the "MONGO_USERNAME" environment variable.
         password (str, optional): The MongoDB password. Defaults to the value from the "MONGO_PASSWORD" environment variable.
         database (str, optional): The MongoDB database name. Defaults to the value from the "MONGO_DATABASE_NAME" environment variable.
-        collection (str, optional): The name of the MongoDB collection to use. Defaults to the value from the "MONGO_COLLECTION_NAME" environment variable.
+        collection (str, optional): The name of the MongoDB collection to use. Defaults to the value from the "MONGO_PRODUCT_COLLECTION_NAME" environment variable.
         composite_collection (str, optional): The name of the MongoDB composite collection to use. Defaults to the value from the "MONGO_COMPOSITE_COLLECTION_NAME" environment variable.
 
     Attributes:
@@ -62,7 +62,7 @@ class MongoConnection:
         username = username or os.environ.get("MONGO_USERNAME")
         password = password or os.environ.get("MONGO_PASSWORD")
         database = database or os.environ.get("MONGO_DATABASE_NAME")
-        collection = collection or os.environ.get("MONGO_COLLECTION_NAME")
+        collection = collection or os.environ.get("MONGO_PRODUCT_COLLECTION_NAME")
         composite_collection = composite_collection or os.environ.get("MONGO_COMPOSITE_COLLECTION_NAME")
 
         self.mongo_client = MongoClient(_build_mongo_uri(host, port, username, password))

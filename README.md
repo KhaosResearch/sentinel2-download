@@ -88,8 +88,8 @@ create_composite_by_tile_and_date(
 Seasonal mode is opt-in. It creates four mean composites per tile/year:
 Winter, Spring, Summer, and Autumn. Product indexes are calculated first, then
 both bands and product index rasters are averaged pixel-wise into seasonal
-rasters. The same `MINIO_BUCKET_NAME` variable is used; point it at the bucket
-intended for seasonal outputs before running this mode.
+rasters. Product rasters use `MINIO_BUCKET_NAME_PRODUCTS`; composite rasters
+use `MINIO_BUCKET_NAME_COMPOSITES`.
 
 ```bash
 python main_script.py --composite-period seasonal
