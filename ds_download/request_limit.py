@@ -3,7 +3,7 @@ from contextlib import contextmanager, nullcontext
 from dask.distributed import Semaphore, get_client
 
 
-MAX_CONCURRENT_EXTERNAL_REQUESTS = 4
+MAX_CONCURRENT_EXTERNAL_REQUESTS = 3
 REQUEST_SEMAPHORE_NAME = "sentinel-external-requests"
 
 
