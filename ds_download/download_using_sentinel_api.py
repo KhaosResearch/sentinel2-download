@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import shutil
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -17,6 +18,9 @@ from ds_download.request_limit import external_request_limit
 
 
 logger = logging.getLogger(__name__)
+
+SENTINEL_API_MAX_ATTEMPTS = 4
+TRANSIENT_SENTINEL_API_STATUSES = {429, 500, 502, 503, 504}
 
 
 def _load_season_date_ranges(seasons_path: str) -> list:
@@ -165,6 +169,55 @@ def dict_to_camel_case_and_str_to_date(d: dict) -> dict:
     return new_dict
 
 
+def _response_body(response: requests.Response) -> str:
+    return response.text[:500]
+
+
+def _retry_delay(response: requests.Response | None, attempt: int) -> float:
+    if response is not None and response.headers.get("Retry-After"):
+        try:
+            return float(response.headers["Retry-After"])
+        except ValueError:
+            pass
+    return min(2 ** (attempt - 1), 30)
+
+
+def _get_sentinel_products(url: str) -> list:
+    for attempt in range(1, SENTINEL_API_MAX_ATTEMPTS + 1):
+        response = None
+        try:
+            with external_request_limit():
+                response = requests.get(url, timeout=60)
+        except requests.RequestException as e:
+            if attempt == SENTINEL_API_MAX_ATTEMPTS:
+                raise RuntimeError(f"Sentinel API request failed: {e}") from e
+            time.sleep(_retry_delay(response, attempt))
+            continue
+
+        if response.status_code in TRANSIENT_SENTINEL_API_STATUSES and attempt < SENTINEL_API_MAX_ATTEMPTS:
+            time.sleep(_retry_delay(response, attempt))
+            continue
+
+        try:
+            payload = response.json()
+        except ValueError as e:
+            raise RuntimeError(
+                f"Sentinel API returned non-JSON response ({response.status_code}): {_response_body(response)}"
+            ) from e
+
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Sentinel API request failed ({response.status_code}): {_response_body(response)}"
+            )
+        if "value" not in payload:
+            raise RuntimeError(
+                f"Sentinel API response missing 'value' ({response.status_code}): {_response_body(response)}"
+            )
+        return payload["value"]
+
+    raise RuntimeError("Sentinel API request failed after retries")
+
+
 def find_products_sentinel_api_by_tile_id(tile_id: str, from_date: str, to_date: str) -> list:
     """
     Find Sentinel-2 products using the Copernicus Open Access Hub API by tile ID.
@@ -177,10 +230,9 @@ def find_products_sentinel_api_by_tile_id(tile_id: str, from_date: str, to_date:
     Returns:
         list: A list of Sentinel-2 products matching the search criteria.
     """
-    with external_request_limit():
-        response = requests.get(
-            f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name eq 'SENTINEL-2' and contains(Name,'MSIL2A') and contains(Name,'{tile_id}') and ContentDate/Start ge {from_date}T00:00:00.000Z and ContentDate/Start lt {to_date}T00:00:00.000Z&$top=1000"
-        ).json()["value"]
+    response = _get_sentinel_products(
+        f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name eq 'SENTINEL-2' and contains(Name,'MSIL2A') and contains(Name,'{tile_id}') and ContentDate/Start ge {from_date}T00:00:00.000Z and ContentDate/Start lt {to_date}T00:00:00.000Z&$top=1000"
+    )
     
     return response
 
@@ -198,10 +250,9 @@ def find_products_sentinel_api_by_geojson_file(geojson_path: str, from_date: str
         list: A list of Sentinel-2 products matching the search criteria.
     """
     footprint = to_wkt(geojson_path)
-    with external_request_limit():
-        response = requests.get(
-            f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name eq 'SENTINEL-2' and contains(Name,'MSIL2A') and OData.CSC.Intersects(area=geography'SRID=4326;{footprint}') and ContentDate/Start ge {from_date}T00:00:00.000Z and ContentDate/Start lt {to_date}T00:00:00.000Z&$top=1000"
-        ).json()["value"]
+    response = _get_sentinel_products(
+        f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name eq 'SENTINEL-2' and contains(Name,'MSIL2A') and OData.CSC.Intersects(area=geography'SRID=4326;{footprint}') and ContentDate/Start ge {from_date}T00:00:00.000Z and ContentDate/Start lt {to_date}T00:00:00.000Z&$top=1000"
+    )
     
     return response
 
