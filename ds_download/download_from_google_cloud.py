@@ -13,6 +13,7 @@ from ds_download.mongo_connection import MongoConnection
 from ds_download.minio_connection import MinioConnection
 from ds_download.observability import configure_logging
 from ds_download.raw_index_calculation import calculate_raw_index
+from ds_download.request_limit import external_request_limit
 
 # Load environment variables
 load_dotenv(".env")
@@ -89,7 +90,8 @@ def download_one_google_cloud(
     bucket_name = os.environ.get("GOOGLE_CLOUD_BUCKET_NAME")
 
     bucket = storage_client.bucket(bucket_name)
-    blobs = list(bucket.list_blobs(prefix=source_blob_name))
+    with external_request_limit():
+        blobs = list(bucket.list_blobs(prefix=source_blob_name))
     logger.info(
         "google cloud product lookup finished",
         extra={
@@ -114,7 +116,8 @@ def download_one_google_cloud(
         product_title_without_discriminator = "_".join(product_title.split("_")[:3])
         list_of_names[-1] = product_title_without_discriminator
         source_blob_alternative_name = join(*list_of_names)
-        blobs = list(bucket.list_blobs(prefix=source_blob_alternative_name))
+        with external_request_limit():
+            blobs = list(bucket.list_blobs(prefix=source_blob_alternative_name))
 
         if len(blobs) == 0:
             logger.warning(
@@ -184,7 +187,8 @@ def download_one_google_cloud(
 
         # Download from Google Cloud
         bucket = storage_client.bucket(bucket_name)
-        blobs = list(bucket.list_blobs(prefix=source_blob_name))
+        with external_request_limit():
+            blobs = list(bucket.list_blobs(prefix=source_blob_name))
 
         product_folder = Path(source_blob_name).name
         
@@ -212,7 +216,8 @@ def download_one_google_cloud(
 
             # Download if file doesn't exist
             if not Path.is_file(local_blob_path):
-                blob.download_to_filename(local_blob_path)
+                with external_request_limit():
+                    blob.download_to_filename(local_blob_path)
             else:
                 logger.debug(
                     "local blob already exists; skipping download",

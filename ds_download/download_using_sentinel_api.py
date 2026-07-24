@@ -13,6 +13,7 @@ from dateutil import parser as dparser
 
 from ds_download.download_from_google_cloud import download_one_google_cloud
 from ds_download.observability import configure_logging
+from ds_download.request_limit import external_request_limit
 
 
 logger = logging.getLogger(__name__)
@@ -176,9 +177,10 @@ def find_products_sentinel_api_by_tile_id(tile_id: str, from_date: str, to_date:
     Returns:
         list: A list of Sentinel-2 products matching the search criteria.
     """
-    response = requests.get(
-        f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name eq 'SENTINEL-2' and contains(Name,'MSIL2A') and contains(Name,'{tile_id}') and ContentDate/Start ge {from_date}T00:00:00.000Z and ContentDate/Start lt {to_date}T00:00:00.000Z&$top=1000"
-    ).json()["value"]
+    with external_request_limit():
+        response = requests.get(
+            f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name eq 'SENTINEL-2' and contains(Name,'MSIL2A') and contains(Name,'{tile_id}') and ContentDate/Start ge {from_date}T00:00:00.000Z and ContentDate/Start lt {to_date}T00:00:00.000Z&$top=1000"
+        ).json()["value"]
     
     return response
 
@@ -196,9 +198,10 @@ def find_products_sentinel_api_by_geojson_file(geojson_path: str, from_date: str
         list: A list of Sentinel-2 products matching the search criteria.
     """
     footprint = to_wkt(geojson_path)
-    response = requests.get(
-        f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name eq 'SENTINEL-2' and contains(Name,'MSIL2A') and OData.CSC.Intersects(area=geography'SRID=4326;{footprint}') and ContentDate/Start ge {from_date}T00:00:00.000Z and ContentDate/Start lt {to_date}T00:00:00.000Z&$top=1000"
-    ).json()["value"]
+    with external_request_limit():
+        response = requests.get(
+            f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name eq 'SENTINEL-2' and contains(Name,'MSIL2A') and OData.CSC.Intersects(area=geography'SRID=4326;{footprint}') and ContentDate/Start ge {from_date}T00:00:00.000Z and ContentDate/Start lt {to_date}T00:00:00.000Z&$top=1000"
+        ).json()["value"]
     
     return response
 
