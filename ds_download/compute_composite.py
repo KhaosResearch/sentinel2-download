@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import shutil
 from collections import defaultdict
 from datetime import datetime, timedelta
 from hashlib import sha256
@@ -442,6 +443,25 @@ def _cleanup_month_folders_from_minio(
         month = (month + timedelta(days=31)).replace(day=1)
 
 
+def _cleanup_composite_temp_paths(
+    tmp_dir: str,
+    products_titles: Iterable[str],
+    composite_title: str,
+    temp_paths: Iterable[str | Path],
+) -> None:
+    for temp_path in temp_paths:
+        path = Path(temp_path)
+        if path.exists():
+            path.unlink()
+
+    temp_dirs = [
+        *(Path(tmp_dir, title) for title in products_titles),
+        Path(tmp_dir, composite_title),
+    ]
+    for temp_dir in temp_dirs:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def _calculate_product_indexes(products_metadata: Iterable[dict], quantize_rasters: bool) -> None:
     for product_metadata in products_metadata:
         calculate_raw_index(
@@ -545,7 +565,6 @@ def _create_composite(
     uploaded_composite_index_paths = []
     uploaded_composite_indexes = {}
     temp_paths_composite_bands = []
-    temp_product_dirs = []
     result = None
     try:
         if include_indexes and any(not paths for paths in indexes_paths_products):
@@ -607,8 +626,6 @@ def _create_composite(
                     temp_path_product_band = f"{temp_dir_product}/{band_filename}"
                     product_minio_client.fget_object(product_bucket_name, band_path, str(temp_path_product_band))
 
-                    if temp_dir_product not in temp_product_dirs:
-                        temp_product_dirs.append(temp_dir_product)
                     temp_path_list.append(temp_path_product_band)
 
                 temp_path_composite_band = str(temp_path_composite_band)
@@ -755,10 +772,12 @@ def _create_composite(
         raise e
 
     finally:
-        for composite_band in temp_paths_composite_bands + cloud_masks_temp_paths:
-            path = Path(composite_band)
-            if path.exists():
-                Path.unlink(path)
+        _cleanup_composite_temp_paths(
+            tmp_dir,
+            products_titles,
+            composite_title,
+            temp_paths_composite_bands + cloud_masks_temp_paths,
+        )
 
     return composite_metadata
 

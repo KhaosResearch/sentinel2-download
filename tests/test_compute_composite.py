@@ -10,6 +10,7 @@ from rasterio.transform import from_origin
 
 from ds_download.compute_composite import (
     _cleanup_month_folders_from_minio,
+    _cleanup_composite_temp_paths,
     create_composite_by_tile_and_date,
     get_season_date_ranges,
     seasonal_composite_exists,
@@ -64,6 +65,30 @@ class CleanupMonthFoldersFromMinioTests(unittest.TestCase):
             ["30STF/2021/March/", "30STF/2021/April/"],
         )
         self.assertEqual(minio_client.remove_object.call_count, 2)
+
+
+class CleanupCompositeTempPathsTests(unittest.TestCase):
+    def test_removes_temp_files_and_product_dirs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            product_dir = temp_path / "S2A_MSIL2A_20210301T000000_NXXX_RXXX_T30STF_20210301T000000"
+            composite_dir = temp_path / "S2S_MSIL2A_20210301T000000_NXXX_RXXX_T30STF_20210301T000000"
+            product_file = product_dir / "raw" / "B04_10m.jp2"
+            composite_file = composite_dir / "raw" / "B04_10m.tif"
+            product_file.parent.mkdir(parents=True)
+            composite_file.parent.mkdir(parents=True)
+            product_file.write_text("band")
+            composite_file.write_text("composite")
+
+            _cleanup_composite_temp_paths(
+                temp_dir,
+                [product_dir.name],
+                composite_dir.name,
+                [product_file, composite_file],
+            )
+
+            self.assertFalse(product_dir.exists())
+            self.assertFalse(composite_dir.exists())
 
 
 class CreateCompositeByTileAndDateTests(unittest.TestCase):
