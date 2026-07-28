@@ -1,18 +1,8 @@
-import argparse
 import unittest
 from datetime import datetime
 from unittest.mock import patch
 
-from main_script_dask import _chunks, _positive_int, process_season
-
-
-class DaskThrottleTests(unittest.TestCase):
-    def test_chunks_tiles_by_max_in_flight_limit(self):
-        self.assertEqual([["a", "b"], ["c", "d"], ["e"]], list(_chunks(["a", "b", "c", "d", "e"], 2)))
-
-    def test_positive_int_rejects_zero(self):
-        with self.assertRaises(argparse.ArgumentTypeError):
-            _positive_int("0")
+from main_script_dask import process_season
 
 
 class ProcessSeasonTests(unittest.TestCase):

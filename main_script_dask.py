@@ -1,6 +1,5 @@
 import argparse
 import logging
-import os
 from datetime import datetime, timedelta
 from dask.distributed import Client, as_completed
 from dotenv import load_dotenv
@@ -129,22 +128,6 @@ years = [2021]
 # TODO: Add May
 months = [4, 7, 11, 10, 3, 6]
 
-
-def _positive_int(value: str) -> int:
-    try:
-        parsed = int(value)
-    except ValueError as e:
-        raise argparse.ArgumentTypeError("must be an integer") from e
-    if parsed < 1:
-        raise argparse.ArgumentTypeError("must be at least 1")
-    return parsed
-
-
-def _chunks(values: list, size: int):
-    for index in range(0, len(values), size):
-        yield values[index:index + size]
-
-
 def main() -> None:
     configure_logging()
     parser = argparse.ArgumentParser()
@@ -152,12 +135,6 @@ def main() -> None:
     parser.add_argument("--composite-period", choices=["monthly", "seasonal"], default="monthly")
     parser.add_argument("--keep-products", action="store_true", help="Do not delete product rasters after seasonal composites are uploaded.")
     parser.add_argument("--quantize-rasters", action="store_true", help="Write generated bands and indexes as quantized compressed GeoTIFFs.")
-    parser.add_argument(
-        "--max-in-flight-tiles",
-        type=_positive_int,
-        default=_positive_int(os.environ.get("DASK_MAX_IN_FLIGHT_TILES", "4")),
-        help="Maximum tile jobs submitted to Dask at once.",
-    )
     args = parser.parse_args()
 
     client = Client(args.scheduler)
@@ -168,61 +145,59 @@ def main() -> None:
 
     if args.composite_period == "monthly":
         for month in months:
-            jobs = [(year, tile) for year in years for tile in tiles]
-            for job_batch in _chunks(jobs, args.max_in_flight_tiles):
-                futures = [
-                    client.submit(process_month, year, month, tile, args.quantize_rasters)
-                    for year, tile in job_batch
-                ]
+            futures = [
+                client.submit(process_month, year, month, tile, args.quantize_rasters)
+                for year in years
+                for tile in tiles
+            ]
 
-                results = client.gather(futures)
+            results = client.gather(futures)
 
-                for result in results:
-                    logger.info("dask task result", extra={"task.result": result})
+            for result in results:
+                logger.info("dask task result", extra={"task.result": result})
         return
 
     for year in years:
         for season_name, start_date, end_date in get_season_date_ranges(year):
-            for tile_batch in _chunks(tiles, args.max_in_flight_tiles):
-                futures = {}
-                for tile in tile_batch:
+            futures = {}
+            for tile in tiles:
+                logger.info(
+                    "dask seasonal tile started",
+                    extra={"pipeline.year": year, "pipeline.season": season_name, "s2.tile": tile},
+                )
+                future = client.submit(
+                    process_season,
+                    year,
+                    season_name,
+                    start_date,
+                    end_date,
+                    tile,
+                    not args.keep_products,
+                    args.quantize_rasters,
+                )
+                futures[future] = {"pipeline.year": year, "pipeline.season": season_name, "s2.tile": tile}
+
+            for future in as_completed(futures):
+                context = futures[future]
+                try:
+                    result = future.result()
+                except Exception as e:
+                    logger.exception(
+                        "dask seasonal tile failed",
+                        extra={**context, "error": str(e)},
+                    )
+                    continue
+
+                if result["status"] == "failed":
+                    logger.error(
+                        "dask seasonal tile failed",
+                        extra={**context, "error": result["error"]},
+                    )
+                else:
                     logger.info(
-                        "dask seasonal tile started",
-                        extra={"pipeline.year": year, "pipeline.season": season_name, "s2.tile": tile},
+                        "dask seasonal tile finished",
+                        extra={**context, "task.status": result["status"]},
                     )
-                    future = client.submit(
-                        process_season,
-                        year,
-                        season_name,
-                        start_date,
-                        end_date,
-                        tile,
-                        not args.keep_products,
-                        args.quantize_rasters,
-                    )
-                    futures[future] = {"pipeline.year": year, "pipeline.season": season_name, "s2.tile": tile}
-
-                for future in as_completed(futures):
-                    context = futures[future]
-                    try:
-                        result = future.result()
-                    except Exception as e:
-                        logger.exception(
-                            "dask seasonal tile failed",
-                            extra={**context, "error": str(e)},
-                        )
-                        continue
-
-                    if result["status"] == "failed":
-                        logger.error(
-                            "dask seasonal tile failed",
-                            extra={**context, "error": result["error"]},
-                        )
-                    else:
-                        logger.info(
-                            "dask seasonal tile finished",
-                            extra={**context, "task.status": result["status"]},
-                        )
 
 
 if __name__ == "__main__":
