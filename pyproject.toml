@@ -20,6 +20,7 @@ classifiers = [
 dependencies = [
     "bokeh>=3.9.1",
     "dask[distributed]",
+    "distributed>=2026.3.0",
     "geojson==2.5.0",
     "geomet==1.1.0",
     "geopandas",
