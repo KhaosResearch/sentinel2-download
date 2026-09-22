@@ -1,7 +1,9 @@
 import os
 from minio import Minio
 from dotenv import load_dotenv
+
 load_dotenv()
+
 
 class MinioConnection(Minio):
     """
@@ -21,14 +23,14 @@ class MinioConnection(Minio):
     Attributes:
         bucket_name (str): The name of the MinIO bucket to use.
     """
-    
+
     def __init__(
-        self, 
+        self,
         host: str = None,
         port: str = None,
         access_key: str = None,
         secret_key: str = None,
-        bucket_name: str = None
+        bucket_name: str = None,
     ):
         host = host or os.environ.get("MINIO_HOST")
         port = port or os.environ.get("MINIO_PORT")
@@ -40,6 +42,6 @@ class MinioConnection(Minio):
             endpoint=f"{host}:{port}",
             access_key=access_key,
             secret_key=secret_key,
-            secure=False  # Secure set to False by default
+            secure=False,  # Secure set to False by default
         )
         self.bucket_name = bucket_name

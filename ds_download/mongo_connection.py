@@ -2,14 +2,16 @@ import os
 from pymongo import MongoClient
 from pymongo.collection import Collection
 from dotenv import load_dotenv
+
 load_dotenv()
+
 
 class MongoConnection:
     """
     A class to handle MongoDB connections and provide access to collections.
 
-    This class connects to a MongoDB database using the connection details retrieved 
-    from environment variables. It provides methods to access both a main collection 
+    This class connects to a MongoDB database using the connection details retrieved
+    from environment variables. It provides methods to access both a main collection
     and a composite collection.
 
     Args:
@@ -29,14 +31,14 @@ class MongoConnection:
     """
 
     def __init__(
-        self, 
-        host: str = None, 
+        self,
+        host: str = None,
         port: str = None,
         username: str = None,
         password: str = None,
         database: str = None,
         collection: str = None,
-        composite_collection: str = None
+        composite_collection: str = None,
     ):
         host = host or os.environ.get("MONGO_HOST")
         port = port or os.environ.get("MONGO_PORT")
@@ -44,12 +46,12 @@ class MongoConnection:
         password = password or os.environ.get("MONGO_PASSWORD")
         database = database or os.environ.get("MONGO_DATABASE_NAME")
         collection = collection or os.environ.get("MONGO_COLLECTION_NAME")
-        composite_collection = composite_collection or os.environ.get("MONGO_COMPOSITE_COLLECTION_NAME")
+        composite_collection = composite_collection or os.environ.get(
+            "MONGO_COMPOSITE_COLLECTION_NAME"
+        )
 
         self.mongo_client = MongoClient(
-            host=f"mongodb://{host}:{port}/",
-            username=username,
-            password=password
+            host=f"mongodb://{host}:{port}/", username=username, password=password
         )
         self.db = database
         self.collection = collection
@@ -63,7 +65,7 @@ class MongoConnection:
             Collection: The MongoDB collection object for the main collection.
         """
         return self.mongo_client[self.db][self.collection]
-    
+
     def get_composite_collection_object(self) -> Collection:
         """
         Get the composite collection object.

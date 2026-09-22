@@ -16,7 +16,6 @@ from requests.adapters import HTTPAdapter
 from shapely.geometry import shape
 from urllib3.util.retry import Retry
 
-from ds_download.download_multi_tile_geojson import download_multi_tile_geojson
 from ds_download.download_from_google_cloud import download_one_google_cloud
 
 logger = structlog.get_logger(__file__)
@@ -53,13 +52,13 @@ def to_wkt(geojson_file: str, decimals: int = 4) -> str:
     """
     Convert a GeoJSON file to its Well-Known Text (WKT) representation.
 
-    This function reads a GeoJSON file, extracts the geometry of the first 
-    feature, and converts it to WKT format with a specified number of decimal places. 
+    This function reads a GeoJSON file, extracts the geometry of the first
+    feature, and converts it to WKT format with a specified number of decimal places.
     It also removes unnecessary spaces from the WKT string for a more compact output.
 
     Args:
         geojson_file (str): Path to the GeoJSON file containing geospatial data.
-        decimals (int, optional): Number of decimal places to include in the WKT 
+        decimals (int, optional): Number of decimal places to include in the WKT
                                   coordinates. Defaults to 4.
 
     Returns:
@@ -70,7 +69,7 @@ def to_wkt(geojson_file: str, decimals: int = 4) -> str:
 
     geometry = geojson_["features"][0]["geometry"]
     if len(str(geometry)) <= 500:
-        wkt = geomet.wkt.dumps(geometry, decimals=decimals) 
+        wkt = geomet.wkt.dumps(geometry, decimals=decimals)
     else:
         gdf = gpd.read_file(geojson_file)
 
@@ -94,13 +93,13 @@ def dict_to_camel_case_and_str_to_date(d: dict) -> dict:
     """
     Convert dictionary keys to camelCase and parse date strings to datetime objects.
 
-    This function processes a nested dictionary, converting all its keys to camelCase 
-    (i.e., making the first letter lowercase) and parsing any value that contains "date" 
-    in its key to a `datetime` object. It applies these transformations recursively for 
+    This function processes a nested dictionary, converting all its keys to camelCase
+    (i.e., making the first letter lowercase) and parsing any value that contains "date"
+    in its key to a `datetime` object. It applies these transformations recursively for
     any nested dictionaries.
 
     Args:
-        d (dict): The dictionary whose keys will be converted to camelCase and where 
+        d (dict): The dictionary whose keys will be converted to camelCase and where
                   date strings will be parsed to `datetime` objects.
 
     Returns:
@@ -119,7 +118,9 @@ def dict_to_camel_case_and_str_to_date(d: dict) -> dict:
     return new_dict
 
 
-def find_products_sentinel_api_by_tile_id(tile_id: str, from_date: str, to_date: str) -> list:
+def find_products_sentinel_api_by_tile_id(
+    tile_id: str, from_date: str, to_date: str
+) -> list:
     """
     Find Sentinel-2 products using the Copernicus Open Access Hub API by tile ID.
 
@@ -134,11 +135,13 @@ def find_products_sentinel_api_by_tile_id(tile_id: str, from_date: str, to_date:
     response = get_catalogue_products(
         f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name eq 'SENTINEL-2' and contains(Name,'MSIL2A') and contains(Name,'{tile_id}') and ContentDate/Start gt {from_date}T00:00:00.000Z and ContentDate/Start lt {to_date}T00:00:00.000Z&$top=1000"
     )
-    
+
     return response
 
 
-def find_products_sentinel_api_by_geojson_file(geojson_path: str, from_date: str, to_date: str) -> list:
+def find_products_sentinel_api_by_geojson_file(
+    geojson_path: str, from_date: str, to_date: str
+) -> list:
     """
     Find Sentinel-2 products using the Copernicus Open Access Hub API by a GeoJSON file.
 
@@ -154,7 +157,7 @@ def find_products_sentinel_api_by_geojson_file(geojson_path: str, from_date: str
     response = get_catalogue_products(
         f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name eq 'SENTINEL-2' and contains(Name,'MSIL2A') and OData.CSC.Intersects(area=geography'SRID=4326;{footprint}') and ContentDate/Start gt {from_date}T00:00:00.000Z and ContentDate/Start lt {to_date}T00:00:00.000Z&$top=1000"
     )
-    
+
     return response
 
 
@@ -162,7 +165,7 @@ def filter_response_by_anchor_tile(response_list: list, geojson_path: str) -> li
     """
     Filters out redundant overlapping tiles for the same date.
     If one tile consistently covers the parcel best across all samples for a date,
-    only that tile's products are kept. If no anchor tile meets the criteria, 
+    only that tile's products are kept. If no anchor tile meets the criteria,
     the products for the best and second best coverage tiles are retained.
 
     Args:
@@ -178,7 +181,7 @@ def filter_response_by_anchor_tile(response_list: list, geojson_path: str) -> li
     # Load the parcel geometry as a Shapely object
     with open(geojson_path, "r") as f:
         geojson_data = json.load(f)
-    
+
     parcel_geom = shape(geojson_data["features"][0]["geometry"])
     parcel_area = parcel_geom.area
     if parcel_area == 0:
@@ -191,7 +194,7 @@ def filter_response_by_anchor_tile(response_list: list, geojson_path: str) -> li
     date_products = defaultdict(lambda: defaultdict(list))
     date_raw_products = defaultdict(list)
     date_valid_flag = defaultdict(bool)
-    
+
     # Single loop to group, calculate intersections, and track metadata properties
     for item in response_list:
         name = item.get("Name", "")
@@ -199,15 +202,17 @@ def filter_response_by_anchor_tile(response_list: list, geojson_path: str) -> li
         if not name or not date_value:
             continue
         date_str = str(date_value)[:10]
-        
+
         # Save a reference to the global daily collection
         date_raw_products[date_str].append(item)
-        
+
         footprint_data = item.get("GeoFootprint") or item.get("Footprint")
         tile_id = name.split("_T")[-1][:5]
-        
+
         if not footprint_data:
-            logger.debug(f"{date_str} | {tile_id} | no footprint available, keeping product for now.")
+            logger.debug(
+                f"{date_str} | {tile_id} | no footprint available, keeping product for now."
+            )
             continue
 
         try:
@@ -217,10 +222,14 @@ def filter_response_by_anchor_tile(response_list: list, geojson_path: str) -> li
             date_coverages[date_str][tile_id].append(coverage_ratio)
             date_products[date_str][tile_id].append((item, coverage_ratio))
             date_valid_flag[date_str] = True
-            logger.debug(f"{date_str} | {tile_id} | sample coverage={coverage_ratio:.4f}")
+            logger.debug(
+                f"{date_str} | {tile_id} | sample coverage={coverage_ratio:.4f}"
+            )
         except Exception as exc:
-            logger.warning(f"{date_str} | {tile_id} | failed to compute footprint coverage: {exc}")
-        
+            logger.warning(
+                f"{date_str} | {tile_id} | failed to compute footprint coverage: {exc}"
+            )
+
     filtered_response = []
 
     # Final pixel extraction step without nested data parsing loops
@@ -230,7 +239,9 @@ def filter_response_by_anchor_tile(response_list: list, geojson_path: str) -> li
             continue
 
         if not date_valid_flag[date_str]:
-            logger.warning(f"{date_str} | no valid tile footprint coverage computed, keeping all products.")
+            logger.warning(
+                f"{date_str} | no valid tile footprint coverage computed, keeping all products."
+            )
             filtered_response.extend(raw_products)
             continue
 
@@ -241,11 +252,13 @@ def filter_response_by_anchor_tile(response_list: list, geojson_path: str) -> li
         }
 
         # Sort tiles by mean coverage descending to instantly extract 1st and 2nd best paths
-        sorted_tiles = sorted(tile_mean_coverage.items(), key=lambda x: x[1], reverse=True)
-        
+        sorted_tiles = sorted(
+            tile_mean_coverage.items(), key=lambda x: x[1], reverse=True
+        )
+
         best_tile_id, best_mean = sorted_tiles[0]
         second_best_tile_id, second_best_mean = sorted_tiles[1]
-        
+
         # If same coverage, choose the tile with the most products overall
         if best_mean == second_best_mean:
             best_count = sum(
@@ -258,14 +271,18 @@ def filter_response_by_anchor_tile(response_list: list, geojson_path: str) -> li
             )
 
             if second_count > best_count:
-                logger.debug(f"Switched from {best_tile_id} at {best_mean} ({len(best_count)} products found) to {second_best_tile_id} at {second_best_mean} ({len(second_count)} products found)")
+                logger.debug(
+                    f"Switched from {best_tile_id} at {best_mean} ({len(best_count)} products found) to {second_best_tile_id} at {second_best_mean} ({len(second_count)} products found)"
+                )
                 best_tile_id, best_mean = second_best_tile_id, second_best_mean
         logger.debug(
             f"{date_str} | tile mean coverages={ {k: round(v, 4) for k, v in tile_mean_coverage.items()} } | best={best_tile_id}:{best_mean:.4f}"
         )
 
         if best_mean > 0.9:
-            anchor_products = [prod for prod, _ in date_products[date_str][best_tile_id]]
+            anchor_products = [
+                prod for prod, _ in date_products[date_str][best_tile_id]
+            ]
             filtered_response.extend(anchor_products)
             logger.debug(
                 f"Anchor tile filter active: selecting tile {best_tile_id} for date {date_str} with mean coverage {best_mean:.4f}."
@@ -281,14 +298,14 @@ def filter_response_by_anchor_tile(response_list: list, geojson_path: str) -> li
 
             # # Fallback logic: Fetch products for best and second best coverage tiles
             # fallback_products = [prod for prod, _ in date_products[date_str][best_tile_id]]
-            
+
             # second_best_log_str = "None"
             # if len(sorted_tiles) > 1:
             #     second_best_tile_id, second_best_mean = sorted_tiles[1]
             #     second_best_log_str = f"{second_best_tile_id}:{second_best_mean:.4f}"
             #     second_best_products = [prod for prod, _ in date_products[date_str][second_best_tile_id]]
             #     fallback_products.extend(second_best_products)
-                
+
             # logger.debug(f"Parcel is not fully contained by a single tile on {date_str} (best mean coverage {best_mean:.4f}). ")
             # logger.debug(f"Retaining best and second best coverage tiles ({best_tile_id}:{best_mean:.4f}, {second_best_log_str}).")
             # filtered_response.extend(fallback_products)
@@ -298,11 +315,11 @@ def filter_response_by_anchor_tile(response_list: list, geojson_path: str) -> li
 
 
 def download_product_using_sentinel_api(
-    calculate_raw_indexes: bool, 
+    calculate_raw_indexes: bool,
     calculate_intermediate_products: bool,
-    from_date: datetime, 
-    to_date: datetime, 
-    geojson_path: str = None, 
+    from_date: datetime,
+    to_date: datetime,
+    geojson_path: str = None,
     tile_id: str = None,
     required_bands: list[str] = None,
     quantize: bool = True,
@@ -339,15 +356,22 @@ def download_product_using_sentinel_api(
         response = find_products_sentinel_api_by_tile_id(tile_id, from_date, to_date)
         filtered_response, on_multiple_tiles = response, False
     elif geojson_path:
-        response = find_products_sentinel_api_by_geojson_file(geojson_path, from_date, to_date)
-        logger.info(f"Initial search returned {len(response)} items across boundaries.\n")
+        response = find_products_sentinel_api_by_geojson_file(
+            geojson_path, from_date, to_date
+        )
+        logger.info(
+            f"Initial search returned {len(response)} items across boundaries.\n"
+        )
         # Remove overlapping tiles from response
-        filtered_response, on_multiple_tiles = filter_response_by_anchor_tile(response, geojson_path)
+        filtered_response, on_multiple_tiles = filter_response_by_anchor_tile(
+            response, geojson_path
+        )
         print()
-        logger.info(f"Filtered search context down from {len(response)} to {len(filtered_response)} clean execution targets.\n")
+        logger.info(
+            f"Filtered search context down from {len(response)} to {len(filtered_response)} clean execution targets.\n"
+        )
     else:
         raise ValueError("You must provide either a GeoJSON file or a tile ID.")
-    
 
     # Download product data
     if not on_multiple_tiles:  # For Tile/ GeoJSON in one tile: Download as usual
@@ -370,7 +394,9 @@ def download_product_using_sentinel_api(
                 quantize=quantize,
             )
     else:  # GeoJSON on multiple tiles only: stream from multiple tiles
-        logger.info(f"Detected GeoJSON '{os.path.basename(geojson_path)}' is contained on multiple tiles. Engaging multiple tiles download pipeline.\n")
+        logger.info(
+            f"Detected GeoJSON '{os.path.basename(geojson_path)}' is contained on multiple tiles. Engaging multiple tiles download pipeline.\n"
+        )
         # TODO
         # download_multi_tile_geojson(
         #     calculate_raw_indexes,

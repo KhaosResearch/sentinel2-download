@@ -1,4 +1,3 @@
-
 import os
 import shutil
 import structlog
@@ -9,15 +8,26 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from ds_download.download_geojson_utils import build_geojson_monthly_composite_metadata, cleanup_geojson_product_data, geojson_monthly_index_key, get_geojson_monthly_index_products, normalize_geojson_name, str_to_bool
+from ds_download.download_geojson_utils import (
+    build_geojson_monthly_composite_metadata,
+    cleanup_geojson_product_data,
+    geojson_monthly_index_key,
+    get_geojson_monthly_index_products,
+    normalize_geojson_name,
+    str_to_bool,
+)
 from ds_download.download_using_sentinel_api import download_product_using_sentinel_api
 from ds_download.minio_connection import MinioConnection
 from ds_download.mongo_connection import MongoConnection
-from ds_download.raw_index_calculation import compress_and_quantize_tiff
 
-from main_script_europe import month_range, required_bands_for_indexes, write_windowed_mean
+from main_script_europe import (
+    month_range,
+    required_bands_for_indexes,
+    write_windowed_mean,
+)
 
 logger = structlog.get_logger(__file__)
+
 
 def create_monthly_geojson_index_mean(
     geojson_path: str,
@@ -48,7 +58,13 @@ def create_monthly_geojson_index_mean(
     normalized_index_name = index_name.lower()
     for product in products:
         index_key = product["indexes"][normalized_index_name]["rasterS3Key"]
-        local_path = tmp_dir / geojson_name / str(year) / f"{month:02}" / f"{product['title']}_{normalized_index_name}.tif"
+        local_path = (
+            tmp_dir
+            / geojson_name
+            / str(year)
+            / f"{month:02}"
+            / f"{product['title']}_{normalized_index_name}.tif"
+        )
         local_path.parent.mkdir(parents=True, exist_ok=True)
         minio_client.fget_object(minio_client.bucket_name, index_key, str(local_path))
         local_index_paths.append(local_path)
@@ -65,7 +81,9 @@ def create_monthly_geojson_index_mean(
         return None
 
     month_name = datetime(year, month, 1).strftime("%B")
-    local_output = tmp_dir / geojson_name / str(year) / month_name / f"{normalized_index_name}.tif"
+    local_output = (
+        tmp_dir / geojson_name / str(year) / month_name / f"{normalized_index_name}.tif"
+    )
     logger.debug(f"LOCAL INDEX PATHS: {local_index_paths}")
     logger.debug(f"LOCAL OUTPUT: {local_output}")
     write_windowed_mean(local_index_paths, local_output)
@@ -138,7 +156,7 @@ def parse_args():
 def main():
     init_time = datetime.now()
     load_dotenv(".env")
-    
+
     # Prepare input pipeline
     args = parse_args()
     geojson_name = normalize_geojson_name(args.geojson_path)
@@ -207,16 +225,17 @@ def main():
         logger.exception("An exception occurred:")
         logger.error(str(e))
         cleanup_geojson_product_data(
-                    args.geojson_path,
-                    args.year,
-                    month,
-                    mongo_col,
-                    minio_client,
-                )
+            args.geojson_path,
+            args.year,
+            month,
+            mongo_col,
+            minio_client,
+        )
     finally:
         shutil.rmtree(run_tmp_dir, ignore_errors=True)
         print()
         logger.info(f"FINAL TIME: {datetime.now() - init_time}")
+
 
 if __name__ == "__main__":
     main()

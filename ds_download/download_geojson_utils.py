@@ -1,4 +1,3 @@
-
 import structlog
 
 from datetime import datetime
@@ -7,11 +6,14 @@ import re
 from os.path import join
 from pathlib import Path
 
-from ds_download.download_using_sentinel_api import find_products_sentinel_api_by_geojson_file
+from ds_download.download_using_sentinel_api import (
+    find_products_sentinel_api_by_geojson_file,
+)
 from ds_download.minio_connection import MinioConnection
 from main_script_europe import month_range, product_title_date
 
 logger = structlog.get_logger(__file__)
+
 
 def normalize_geojson_name(geojson_path: str) -> str:
     geojson_name = Path(geojson_path).stem
@@ -71,7 +73,9 @@ def geojson_monthly_composite_raw_prefix(
     title: str,
 ) -> str:
     month_name = datetime(year, month, 1).strftime("%B")
-    return join("geojson", geojson_name, str(year), month_name, "composites", title, "raw", "")
+    return join(
+        "geojson", geojson_name, str(year), month_name, "composites", title, "raw", ""
+    )
 
 
 def build_geojson_monthly_composite_metadata(
@@ -85,7 +89,9 @@ def build_geojson_monthly_composite_metadata(
     if title is None:
         return None
 
-    products_dates = [product_title_date(product_title) for product_title in product_titles]
+    products_dates = [
+        product_title_date(product_title) for product_title in product_titles
+    ]
     return {
         "title": title,
         "products": [{"title": product_title} for product_title in product_titles],
@@ -102,7 +108,9 @@ def build_geojson_monthly_composite_metadata(
     }
 
 
-def product_filter_for_tiles(tile_ids: list[str], start_date: datetime, end_date: datetime) -> dict:
+def product_filter_for_tiles(
+    tile_ids: list[str], start_date: datetime, end_date: datetime
+) -> dict:
     return {
         "tile": {"$in": tile_ids},
         "datetakeSensingTime": {"$gte": start_date, "$lt": end_date},
@@ -141,13 +149,15 @@ def get_geojson_monthly_index_products(
         return []
 
     raster_key = f"indexes.{index_name.lower()}.rasterS3Key"
-    return list(mongo_col.find(
-        {
-            **product_filter_for_tiles(tiles, start_date, end_date),
-            raster_key: {"$exists": True},
-        },
-        {"title": 1, raster_key: 1},
-    ))
+    return list(
+        mongo_col.find(
+            {
+                **product_filter_for_tiles(tiles, start_date, end_date),
+                raster_key: {"$exists": True},
+            },
+            {"title": 1, raster_key: 1},
+        )
+    )
 
 
 def cleanup_geojson_product_data(
@@ -170,13 +180,19 @@ def cleanup_geojson_product_data(
         try:
             tile_id = title.split("_T")[1][0:5]
             year_str = title.split("_")[2][0:4]
-            month_name = datetime.strptime(title.split("_")[2][4:6], "%m").strftime("%B")
+            month_name = datetime.strptime(title.split("_")[2][4:6], "%m").strftime(
+                "%B"
+            )
             prefix = join(tile_id, year_str, month_name, "products", title, "")
         except Exception as exc:
-            logger.warning(f"Could not parse product title for cleanup: {title} ({exc})")
+            logger.warning(
+                f"Could not parse product title for cleanup: {title} ({exc})"
+            )
             continue
 
-        for obj in minio_client.list_objects(minio_client.bucket_name, prefix=prefix, recursive=True):
+        for obj in minio_client.list_objects(
+            minio_client.bucket_name, prefix=prefix, recursive=True
+        ):
             minio_client.remove_object(minio_client.bucket_name, obj.object_name)
 
     mongo_col.delete_many(query)

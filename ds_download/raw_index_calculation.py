@@ -1,7 +1,6 @@
 import os
 from os.path import join
 import shutil
-from enum import Enum
 from pathlib import Path
 from datetime import datetime
 
@@ -24,12 +23,13 @@ from ds_download.band_arithmetic import (
     ndyi,
     osavi,
     ri,
-    true_color
+    true_color,
 )
 from ds_download.minio_connection import MinioConnection
 from ds_download.mongo_connection import MongoConnection
 
 import structlog
+
 logger = structlog.get_logger()
 
 load_dotenv(".env")
@@ -57,8 +57,8 @@ indexes_bands = dict(
 
 
 def compress_and_quantize_tiff(
-        tif_path: str | Path,
-    ) -> Path:
+    tif_path: str | Path,
+) -> Path:
     """
     Rewrite a TIFF as compressed Int16 before uploading it to MinIO.
 
@@ -78,7 +78,9 @@ def compress_and_quantize_tiff(
     scale = 1
     if finite_mask.any():
         finite_values = data[finite_mask]
-        has_fractional_values = np.any(~np.isclose(finite_values, np.rint(finite_values)))
+        has_fractional_values = np.any(
+            ~np.isclose(finite_values, np.rint(finite_values))
+        )
         should_scale_normalized_float = (
             np.issubdtype(data.dtype, np.floating)
             and finite_values.min() >= -1
@@ -115,33 +117,34 @@ def find_product_image(band_name: str, product_title: str) -> Path:
     """
     Finds image matching a pattern in the product folder with glob.
     Prefers .tif (GeoJSON masked) over .jp2 (full tile).
-    
+
     :param band_name: Band name to match (e.g., "B08_10m").
     :param product_title: Product title for the folder.
     :return: A Path object pointing to the first found image.
     """
     product_folder = join(os.environ.get("TMP_DIR"), product_title)
-    
+
     # Try to find .tif first (GeoJSON mode)
     tif_matches = [f for f in Path(product_folder).glob("*" + band_name + "*.tif")]
     if tif_matches:
         return tif_matches[0]
-    
+
     # Fall back to .jp2 (tile mode)
     jp2_matches = [f for f in Path(product_folder).glob("*" + band_name + "*.jp2")]
     if jp2_matches:
         return jp2_matches[0]
-    
+
     raise FileNotFoundError(f"No band file found for {band_name} in {product_folder}")
 
+
 def get_index(
-        index_name: str,
-        bands_dict: dict,
-        product_title: str,
-        minio_folder_name: str,
-        is_composite: bool,
-        quantize: bool = True
-    ):
+    index_name: str,
+    bands_dict: dict,
+    product_title: str,
+    minio_folder_name: str,
+    is_composite: bool,
+    quantize: bool = True,
+):
 
     band_extension = ".tif" if is_composite else ".jp2"
 
@@ -262,17 +265,22 @@ def get_index(
     minio_bucket_name = minio_client.bucket_name
 
     if is_composite:
-        date = datetime.strptime(product_title.split('_')[2], "%Y%m%d")
+        date = datetime.strptime(product_title.split("_")[2], "%Y%m%d")
     else:
-        date = datetime.strptime(product_title.split('_')[2], "%Y%m%dT%H%M%S")
+        date = datetime.strptime(product_title.split("_")[2], "%Y%m%dT%H%M%S")
     year = date.strftime("%Y")
     month = date.strftime("%B")
     tile_id = product_title.split("_T")[1][0:5]
     minio_dir = join(tile_id, year, month, "")
-    minio_dir = join(minio_dir, "products", "") if not is_composite else join(minio_dir, "composites", "")
+    minio_dir = (
+        join(minio_dir, "products", "")
+        if not is_composite
+        else join(minio_dir, "composites", "")
+    )
 
-    tif_minio_path = join(minio_dir, product_title, minio_folder_name ,index_name + ".tif")
-
+    tif_minio_path = join(
+        minio_dir, product_title, minio_folder_name, index_name + ".tif"
+    )
 
     tif_path = indexes_folder + "/" + index_name + ".tif"
     upload_path = compress_and_quantize_tiff(tif_path) if quantize else Path(tif_path)
@@ -288,14 +296,18 @@ def get_index(
     for k, v in bands_dict.items():
         band[k] = {}
         band[k]["rasterS3Bucket"] = minio_bucket_name
-        band[k]["rasterS3Key"] = join(minio_dir, product_title, "raw" , v + band_extension)
+        band[k]["rasterS3Key"] = join(
+            minio_dir, product_title, "raw", v + band_extension
+        )
 
     index_dict = {
         "name": index_name,
         "rasterS3Bucket": minio_bucket_name,
         "rasterS3Key": tif_minio_path,
         "bands": band,
-        "rasterMeanValue": float(index_value) if index_value is not None else index_value
+        "rasterMeanValue": float(index_value)
+        if index_value is not None
+        else index_value,
     }
 
     return index_dict
@@ -311,16 +323,16 @@ def calculate_raw_index(
     """
     Example: python raw_index_calculation.py --uid dad7f379-de8c-49ec-b4cf-44348d0f418c --index ndvi --index ndsi --temp-dir ./data
     """
-    
+
     # Connect with mongo
     if is_composite:
         mongo_col = MongoConnection().get_composite_collection_object()
         band_extension = ".tif"
-        date = datetime.strptime(product_title.split('_')[2], "%Y%m%d")        
+        date = datetime.strptime(product_title.split("_")[2], "%Y%m%d")
     else:
         mongo_col = MongoConnection().get_collection_object()
         band_extension = ".jp2"
-        date = datetime.strptime(product_title.split('_')[2], "%Y%m%dT%H%M%S")
+        date = datetime.strptime(product_title.split("_")[2], "%Y%m%dT%H%M%S")
 
     # Search product metadata in Mongo
     product_data = mongo_col.find_one({"title": product_title})
@@ -337,7 +349,11 @@ def calculate_raw_index(
     month = date.strftime("%B")
     tile_id = product_data["title"].split("_T")[1][0:5]
     minio_dir = join(tile_id, year, month, "")
-    minio_dir = join(minio_dir, "products", "") if not is_composite else join(minio_dir, "composites", "")
+    minio_dir = (
+        join(minio_dir, "products", "")
+        if not is_composite
+        else join(minio_dir, "composites", "")
+    )
     bands_dir = join(minio_dir, product_title, "raw", "")
 
     # Create dictionary of indexes
@@ -356,27 +372,25 @@ def calculate_raw_index(
             logger.warning("The index " + index_name + " is already calculated")
             continue
 
-
         logger.info("Calculating index " + index_name)
 
         for v in indexes_bands[index_name].values():
-
             # Try .tif first (GeoJSON masked), then .jp2 (full tile)
             local_band_path = join(product_local_folder, v + ".tif")
             minio_band_file_tif = v + ".tif"
             minio_band_file_jp2 = v + band_extension
-            
+
             logger.debug(f"MINIO OBJECT (.tif): {join(bands_dir, minio_band_file_tif)}")
             logger.debug(f"MINIO OBJECT (.jp2): {join(bands_dir, minio_band_file_jp2)}")
             logger.debug(f"LOCAL OBJECT: {local_band_path}")
-            
+
             if not os.path.exists(local_band_path):
                 # Try .tif first
                 try:
                     minio_client.fget_object(
                         minio_bucket_name,
                         join(bands_dir, minio_band_file_tif),
-                        local_band_path
+                        local_band_path,
                     )
                     logger.debug(f"Downloaded .tif band: {minio_band_file_tif}")
                 except Exception:
@@ -386,7 +400,7 @@ def calculate_raw_index(
                         minio_client.fget_object(
                             minio_bucket_name,
                             join(bands_dir, minio_band_file_jp2),
-                            local_band_path_jp2
+                            local_band_path_jp2,
                         )
                         local_band_path = local_band_path_jp2
                         logger.debug(f"Downloaded .jp2 band: {minio_band_file_jp2}")
@@ -401,17 +415,15 @@ def calculate_raw_index(
             product_title=product_title,
             minio_folder_name=minio_folder_name,
             is_composite=is_composite,
-            quantize=quantize
+            quantize=quantize,
         )
-
 
     # merge existing indexes in the product_data with the new ones
     index_dicts.update(product_data[minio_folder_name])
 
     # Push the index_dicts to MongoDB
     mongo_col.update_one(
-        {"title": product_title},
-        {"$set": {minio_folder_name: index_dicts}}
+        {"title": product_title}, {"$set": {minio_folder_name: index_dicts}}
     )
 
     # Remove product from local folder

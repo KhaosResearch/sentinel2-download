@@ -28,13 +28,21 @@ class ProcessTileMonthTmpTest(unittest.TestCase):
             with (
                 patch.dict(os.environ, {"TMP_DIR": str(worker_tmp_dir)}),
                 patch("main_script_europe.load_dotenv"),
-                patch("main_script_europe.MongoConnection", return_value=FakeMongoConnection()),
-                patch("main_script_europe.MinioConnection", return_value=FakeMinioConnection()),
+                patch(
+                    "main_script_europe.MongoConnection",
+                    return_value=FakeMongoConnection(),
+                ),
+                patch(
+                    "main_script_europe.MinioConnection",
+                    return_value=FakeMinioConnection(),
+                ),
                 patch("main_script_europe.missing_indexes_for_month", return_value=[]),
             ):
                 result = process_tile_month("26WPT", 2024, 1, ["NDWI"])
 
-                self.assertEqual(result, "Skipped 26WPT 2024-01: monthly indexes already exist")
+                self.assertEqual(
+                    result, "Skipped 26WPT 2024-01: monthly indexes already exist"
+                )
                 self.assertEqual(os.environ["TMP_DIR"], str(worker_tmp_dir))
                 self.assertEqual(list(worker_tmp_dir.glob("dask_*")), [])
 
@@ -46,7 +54,10 @@ class ProcessTileMonthTmpTest(unittest.TestCase):
             with (
                 patch.dict(os.environ, {"TMP_DIR": str(worker_tmp_dir)}),
                 patch("main_script_europe.load_dotenv"),
-                patch("main_script_europe.MongoConnection", side_effect=RuntimeError("mongo unavailable")),
+                patch(
+                    "main_script_europe.MongoConnection",
+                    side_effect=RuntimeError("mongo unavailable"),
+                ),
             ):
                 with self.assertRaisesRegex(RuntimeError, "mongo unavailable"):
                     process_tile_month("26WPT", 2024, 1, ["NDWI"])

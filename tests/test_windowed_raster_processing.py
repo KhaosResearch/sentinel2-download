@@ -10,7 +10,11 @@ from rasterio.transform import from_origin
 
 from ds_download.band_arithmetic import ndvi, ndwi
 from main_script_geojson import create_monthly_geojson_index_mean
-from main_script_europe import build_monthly_composite_metadata, upsert_monthly_composite_metadata, write_windowed_mean
+from main_script_europe import (
+    build_monthly_composite_metadata,
+    upsert_monthly_composite_metadata,
+    write_windowed_mean,
+)
 
 
 class FakeCompositeCollection:
@@ -92,7 +96,9 @@ class WindowedRasterProcessingTest(unittest.TestCase):
                 source_paths.append(source_path)
 
             output_path = tmp_path / "mean.tif"
-            output_metadata = write_windowed_mean(source_paths, output_path, block_size=2)
+            output_metadata = write_windowed_mean(
+                source_paths, output_path, block_size=2
+            )
 
             expected_sources = []
             for data in [source_1, source_2]:
@@ -175,7 +181,9 @@ class WindowedRasterProcessingTest(unittest.TestCase):
             metadata,
             {
                 "title": "S2S_MSIL2A_20240302_NXXX_RXXX_T26WPT_20240330_64081333",
-                "products": [{"title": product_title} for product_title in product_titles],
+                "products": [
+                    {"title": product_title} for product_title in product_titles
+                ],
                 "first_date": datetime(2024, 3, 2),
                 "last_date": datetime(2024, 3, 30),
                 "S3Bucket": "europe-satellite-timeseries",
@@ -211,7 +219,9 @@ class WindowedRasterProcessingTest(unittest.TestCase):
 
         self.assertEqual(len(composite_col.calls), 1)
         query, update, upsert = composite_col.calls[0]
-        self.assertEqual(query, {"title": "S2S_MSIL2A_20240302_NXXX_RXXX_T26WPT_20240330_64081333"})
+        self.assertEqual(
+            query, {"title": "S2S_MSIL2A_20240302_NXXX_RXXX_T26WPT_20240330_64081333"}
+        )
         self.assertTrue(upsert)
         self.assertEqual(
             update["$set"]["indexes.ndvi"],
@@ -256,12 +266,24 @@ class WindowedRasterProcessingTest(unittest.TestCase):
 
             products_by_index = {
                 "ndwi": [
-                    {"title": product_titles[0], "indexes": {"ndwi": {"rasterS3Key": "indexes/p1_ndwi.tif"}}},
-                    {"title": product_titles[1], "indexes": {"ndwi": {"rasterS3Key": "indexes/p2_ndwi.tif"}}},
+                    {
+                        "title": product_titles[0],
+                        "indexes": {"ndwi": {"rasterS3Key": "indexes/p1_ndwi.tif"}},
+                    },
+                    {
+                        "title": product_titles[1],
+                        "indexes": {"ndwi": {"rasterS3Key": "indexes/p2_ndwi.tif"}},
+                    },
                 ],
                 "ndvi": [
-                    {"title": product_titles[0], "indexes": {"ndvi": {"rasterS3Key": "indexes/p1_ndvi.tif"}}},
-                    {"title": product_titles[1], "indexes": {"ndvi": {"rasterS3Key": "indexes/p2_ndvi.tif"}}},
+                    {
+                        "title": product_titles[0],
+                        "indexes": {"ndvi": {"rasterS3Key": "indexes/p1_ndvi.tif"}},
+                    },
+                    {
+                        "title": product_titles[1],
+                        "indexes": {"ndvi": {"rasterS3Key": "indexes/p2_ndvi.tif"}},
+                    },
                 ],
             }
             minio_client = FakeMinioClient(object_paths)
@@ -269,7 +291,9 @@ class WindowedRasterProcessingTest(unittest.TestCase):
 
             with unittest.mock.patch(
                 "main_script_geojson.get_geojson_monthly_index_products",
-                side_effect=lambda geojson_path, year, month, index_name, mongo_col: products_by_index[index_name.lower()],
+                side_effect=lambda geojson_path, year, month, index_name, mongo_col: (
+                    products_by_index[index_name.lower()]
+                ),
             ):
                 ndwi_key = create_monthly_geojson_index_mean(
                     "test.geojson",
@@ -296,8 +320,13 @@ class WindowedRasterProcessingTest(unittest.TestCase):
             self.assertTrue(ndvi_key.endswith("/indexes/ndvi.tif"))
             self.assertEqual(len(minio_client.uploads), 2)
 
-            uploaded = {Path(upload[2]).name: upload[2] for upload in minio_client.uploads}
-            with rasterio.open(uploaded["ndwi.tif"]) as ndwi_src, rasterio.open(uploaded["ndvi.tif"]) as ndvi_src:
+            uploaded = {
+                Path(upload[2]).name: upload[2] for upload in minio_client.uploads
+            }
+            with (
+                rasterio.open(uploaded["ndwi.tif"]) as ndwi_src,
+                rasterio.open(uploaded["ndvi.tif"]) as ndvi_src,
+            ):
                 ndwi = ndwi_src.read(1)
                 ndvi = ndvi_src.read(1)
 

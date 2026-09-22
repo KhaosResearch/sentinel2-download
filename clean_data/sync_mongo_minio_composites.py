@@ -1,10 +1,8 @@
-import json
-from bson.json_util import dumps
 from ds_download.minio_connection import MinioConnection
 from ds_download.mongo_connection import MongoConnection
 from ds_download.raw_index_calculation import calculate_raw_index
-from os.path import join
 from collections import defaultdict
+
 
 def rename_keys(nested_dict, key_map):
     """Recursively rename keys in a nested dictionary."""
@@ -48,9 +46,9 @@ for document in cursor:
             # "TCI",
             "RI",
             "BSI",
-            "CRI1"
+            "CRI1",
         ],
-        is_composite=True
+        is_composite=True,
     )
 
 
@@ -77,7 +75,6 @@ for document in cursor:
     print(f"Document {document['_id']} updated.")
 
 
-
 # Step 4. Delete documents that are not found in MinIO
 
 cursor = mongo_col.find({})
@@ -86,7 +83,9 @@ for document in cursor:
     break
     minio_bucket = document["S3Bucket"]
     minio_prefix = document["S3BandsPrefix"]
-    minio_objects = minio_client.list_objects(minio_bucket, minio_prefix, recursive=True)
+    minio_objects = minio_client.list_objects(
+        minio_bucket, minio_prefix, recursive=True
+    )
     if not any(minio_objects):
         mongo_col.delete_one({"_id": document["_id"]})
         print(f"Document {document['_id']} deleted.")
@@ -132,9 +131,7 @@ for key in composite_dict:
         # keep the one with greater "_id" (added last) (both have same name)
         ids = mongo_col.find({"title": {"$in": composite_dict[key]}})
         max_id = max([doc["_id"] for doc in ids])
-        mongo_col.delete_many({"title": {"$in": composite_dict[key]}, "_id": {"$ne": max_id}})
+        mongo_col.delete_many(
+            {"title": {"$in": composite_dict[key]}, "_id": {"$ne": max_id}}
+        )
         print(f"Deleted composites for {key}")
-        
-
-
-    
